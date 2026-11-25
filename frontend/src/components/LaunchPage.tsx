@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, big, n, type Book, type LaunchDetail, type Trade } from '../lib/api.ts'
 import { midUp } from '../lib/market.ts'
+import { fmtPrice } from '../lib/units.ts'
 import { useApp } from '../state.tsx'
 import { phaseOf } from './LaunchCard.tsx'
 import { LaunchProgress } from './LaunchProgress.tsx'
@@ -108,12 +109,13 @@ export function LaunchPage({ id }: { id: number }) {
             phase={phase}
             now={now}
           />
+          {settled && <OutcomePanel l={l} phase={phase} mine={mine} />}
           <PriceChart feed={l.feed} strike={strike} settleTime={settleTime} />
-          {settled && <OutcomePanel l={l} phase={phase} mine={mine} position={position} />}
           <LaunchProgress l={l} bnbUsd={bnbUsd} position={position} mine={mine} />
           <Positions position={position} cutBps={n(l.cutBps)} mid={midUp(b)} orders={orders} trades={tr} onCancel={app.cancelOrder} />
         </div>
         <div className="launch-side">
+          {!settled && (
           <TradePanel
             launchId={id}
             title={question(feedSym, strike, settleTime)}
@@ -130,7 +132,20 @@ export function LaunchPage({ id }: { id: number }) {
             onConnect={() => app.setAccountOpen(true)}
             onOrder={app.placeOrder}
           />
+          )}
           {!settled && <OrderBook book={b} />}
+          {settled && (
+            <div className="panel section">
+              <h3>Market settled</h3>
+              <div className="muted small">
+                Settlement price {l.snapped ? fmtPrice(l.settlePrice) : '—'} vs strike {fmtPrice(strike)}. Payouts were credited to traders' balances
+                automatically.
+              </div>
+              <button className="btn wide" style={{ marginTop: 12 }} onClick={() => app.setAccountOpen(true)}>
+                View balance
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
