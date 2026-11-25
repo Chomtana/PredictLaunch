@@ -135,7 +135,7 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
     <div className="chart-wrap">
       <div ref={el} style={{ position: 'absolute', inset: 0 }} />
       {points === 0 && <div className="chart-empty">Waiting for price data…</div>}
-      <div className="chart-legend">Source: Atlas oracle</div>
+      <div className="chart-legend">Source: CoinMarketCap × Atlas</div>
     </div>
   )
 }

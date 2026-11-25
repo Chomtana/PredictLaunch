@@ -43,6 +43,9 @@ struct Args {
     /// First block to read Exchange logs from (default: found by binary search on its code).
     #[arg(long, env = "BILAUNCHER_START_BLOCK")]
     start_block: Option<u64>,
+    /// Atlas offchain price API for the chart stream ("off" = onchain feeds only).
+    #[arg(long, env = "BILAUNCHER_PRICE_API", default_value = bilauncher_sequencer::prices::ATLAS_API)]
+    price_api: String,
 }
 
 #[tokio::main]
@@ -77,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
         poll_ms: args.poll_ms,
         dev_faucet: args.dev_faucet,
         start_block,
+        price_api: (!args.price_api.is_empty() && args.price_api != "off")
+            .then_some(args.price_api.clone()),
     };
     let app = app::App::new(chain, settings).await?;
     app.spawn_background();

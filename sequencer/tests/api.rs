@@ -8,9 +8,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use bilauncher_core::eip712::{cancel_hash, TestKey};
 use bilauncher_core::{order_hash, Order, Outcome, Side, BNB_USD_FEED};
+use bilauncher_sequencer::api;
 use bilauncher_sequencer::app::{App, Settings};
 use bilauncher_sequencer::testutil::*;
-use bilauncher_sequencer::api;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -41,6 +41,7 @@ impl T {
             poll_ms: 1000,
             dev_faucet,
             start_block: 0,
+            price_api: None,
         };
         let app = App::new(chain, settings).await.unwrap();
         let router = api::router(app.clone());
@@ -69,7 +70,10 @@ impl T {
             .unwrap();
         let status = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     async fn get(&self, path: &str) -> Value {
@@ -107,7 +111,13 @@ fn place(k: &TestKey, outcome: Outcome, side: Side, price: u8, amount: u128) -> 
 async fn status_shape() {
     let t = T::new(false).await;
     let v = t.get("/api/status").await;
-    for k in ["lastBatchId", "lastBatchTs", "pendingFills", "inflight", "softReversals"] {
+    for k in [
+        "lastBatchId",
+        "lastBatchTs",
+        "pendingFills",
+        "inflight",
+        "softReversals",
+    ] {
         assert!(v.get(k).is_some(), "missing {k}: {v}");
     }
     assert_eq!(v["inflight"], json!(false));
@@ -119,15 +129,29 @@ async fn config_shape() {
     let t = T::new(false).await;
     let v = t.get("/api/config").await;
     for k in [
-        "chainId", "rpc", "exchange", "factory", "portal", "saltLockFee", "minTarget", "cuts",
-        "feeds", "minDuration", "maxDuration", "batchMs", "devFaucet",
+        "chainId",
+        "rpc",
+        "exchange",
+        "factory",
+        "portal",
+        "saltLockFee",
+        "minTarget",
+        "cuts",
+        "feeds",
+        "minDuration",
+        "maxDuration",
+        "batchMs",
+        "devFaucet",
     ] {
         assert!(v.get(k).is_some(), "missing {k}: {v}");
     }
     assert_eq!(v["chainId"], json!(97));
     assert_eq!(v["cuts"], json!([1000, 1500, 2000, 2500, 3000]));
     assert_eq!(v["minTarget"], json!("2150000000000000000"));
-    assert_eq!(v["factory"].as_str().unwrap().parse::<Address>().unwrap(), Address::repeat_byte(0xFA));
+    assert_eq!(
+        v["factory"].as_str().unwrap().parse::<Address>().unwrap(),
+        Address::repeat_byte(0xFA)
+    );
     let feeds = v["feeds"].as_array().unwrap();
     assert_eq!(feeds.len(), 18);
     assert!(feeds.iter().any(|f| f["symbol"] == "BTCB/USD"));
@@ -140,7 +164,10 @@ async fn config_shape() {
     let d = t.get("/api/launch/0").await;
     assert_eq!(d["symbol"], "C0");
     assert!(d.get("lastTrades").is_some());
-    assert_eq!(t.req("GET", "/api/launch/9", None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        t.req("GET", "/api/launch/9", None).await.0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
@@ -156,7 +183,10 @@ async fn place_and_book() {
     t.req("POST", "/api/msgs", Some(json!([m2]))).await;
     let b = t.get("/api/book/0").await;
     assert_eq!(b["bids"], json!([{"price": 40, "amount": E18.to_string()}]));
-    assert_eq!(b["asks"], json!([{"price": 70, "amount": (2 * E18).to_string()}]));
+    assert_eq!(
+        b["asks"],
+        json!([{"price": 70, "amount": (2 * E18).to_string()}])
+    );
     let ls = t.get("/api/launches").await;
     assert_eq!(ls[0]["upPrice"], json!(55.0));
 
@@ -179,7 +209,9 @@ async fn group_error_reports_index() {
     let t = T::new(false).await;
     let (_, ok) = place(&t.alice, Outcome::Up, Side::Buy, 40, E18);
     let (_, dust) = place(&t.alice, Outcome::Up, Side::Buy, 40, E18 + 1);
-    let (s, v) = t.req("POST", "/api/msgs", Some(json!([ok.clone(), dust]))).await;
+    let (s, v) = t
+        .req("POST", "/api/msgs", Some(json!([ok.clone(), dust])))
+        .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert_eq!(v["error"], "bad_amount");
     assert_eq!(v["index"], json!(1));
@@ -187,7 +219,9 @@ async fn group_error_reports_index() {
     assert_eq!(t.get("/api/book/0").await["bids"], json!([]));
 
     let (_, broke) = place(&t.alice, Outcome::Up, Side::Buy, 99, 100 * E18);
-    let (_, v) = t.req("POST", "/api/msgs", Some(json!([ok.clone(), broke]))).await;
+    let (_, v) = t
+        .req("POST", "/api/msgs", Some(json!([ok.clone(), broke])))
+        .await;
     assert_eq!(v["error"], "insufficient_balance");
     assert_eq!(v["index"], json!(1));
 
@@ -284,16 +318,18 @@ async fn ws_pushes_on_change() {
     assert_eq!(snap["book"]["bids"][0]["price"], json!(40));
     assert_eq!(snap["user"]["locked"], json!((4 * E18 / 10).to_string()));
     // Price ticks are pushed too.
-    t.app.record_price(BNB_USD_FEED, 1_900_000_000, U256::from(600u64));
+    t.app
+        .record_price(BNB_USD_FEED, 1_900_000_000, U256::from(600u64));
     let mut m = next_json(&mut ws).await;
     while m["type"] != "price" {
         m = next_json(&mut ws).await;
     }
     assert_eq!(m["price"], json!("600"));
-    let p = t
-        .get(&format!("/api/prices/{BNB_USD_FEED}?since=1"))
-        .await;
-    assert_eq!(p, json!([{"t": 1_900_000_000u64, "price": "600"}]));
+    let p = t.get(&format!("/api/prices/{BNB_USD_FEED}?since=1")).await;
+    assert_eq!(
+        p,
+        json!([{"t": 1_900_000_000u64, "price": "600", "source": "onchain"}])
+    );
 }
 
 async fn next_json<S, E>(ws: &mut S) -> Value
@@ -313,7 +349,11 @@ where
 async fn faucet_disabled_by_default() {
     let t = T::new(false).await;
     let (s, v) = t
-        .req("POST", "/api/faucet", Some(json!({"address": t.alice.address()})))
+        .req(
+            "POST",
+            "/api/faucet",
+            Some(json!({"address": t.alice.address()})),
+        )
         .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(v["error"], "faucet_disabled");
@@ -321,7 +361,11 @@ async fn faucet_disabled_by_default() {
 
     let t = T::new(true).await;
     let (s, v) = t
-        .req("POST", "/api/faucet", Some(json!({"address": t.alice.address()})))
+        .req(
+            "POST",
+            "/api/faucet",
+            Some(json!({"address": t.alice.address()})),
+        )
         .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(t.app.chain.calls().len(), 1);

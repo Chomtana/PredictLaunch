@@ -8,5 +8,6 @@ pub mod api;
 pub mod app;
 pub mod chain;
 pub mod keeper;
+pub mod prices;
 pub mod testutil;
 pub mod views;

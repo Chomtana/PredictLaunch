@@ -86,6 +86,8 @@ export interface Book {
 export interface PricePoint {
   t: number
   price: string
+  /** "atlas-api" (Atlas offchain API, CoinMarketCap-backed) or "onchain" (feed latestRoundData fallback). */
+  source?: 'atlas-api' | 'onchain'
 }
 
 export interface OrderView {

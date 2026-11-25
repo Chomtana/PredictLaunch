@@ -51,6 +51,11 @@ Where the sequencer reads SPEC.md in a way that isn't spelled out, or adds to it
   deposit tx).
 - WS: the snapshot also carries `status` and `launches`. Both `{sub:{...}}` and a bare
   `{launchId, user}` are accepted, and `launchId` may be a number or a string.
+- `/api/prices/:feed` (integration change): points come from the Atlas offchain API (`src/prices.rs`, one
+  request per 2 s poll, 5 s timeout, own task so batching never waits) tagged `source: "atlas-api"` with `t` =
+  the API timestamp (appended only when it moves); a feed missing from the API or older than 30 s is read
+  onchain (`source: "onchain"`, `t` = poll time). `--price-api` / `BILAUNCHER_PRICE_API` (`off` disables).
+  `currentPrice` carries `source` too.
 - `/api/prices/:feed`: all 18 feeds of the table (plus any other feed a launch uses) are polled every
   2 s. `t` is the poll time (unix seconds), not the feed's `updatedAt`. 24 h of history, ascending.
 

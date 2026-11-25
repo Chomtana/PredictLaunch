@@ -51,7 +51,12 @@ pub fn router<C: Chain>(app: Arc<App<C>>) -> Router {
 
 type AppState<C> = State<Arc<App<C>>>;
 
-fn err(code: StatusCode, error: &str, message: impl Into<String>, index: Option<usize>) -> Response {
+fn err(
+    code: StatusCode,
+    error: &str,
+    message: impl Into<String>,
+    index: Option<usize>,
+) -> Response {
     let mut body = json!({ "error": error, "message": message.into() });
     if let Some(i) = index {
         body["index"] = json!(i);
@@ -146,7 +151,12 @@ async fn prices<C: Chain>(
     Query(q): Query<Q>,
 ) -> Response {
     let Ok(feed) = feed.parse::<Address>() else {
-        return err(StatusCode::BAD_REQUEST, "bad_request", "not an address", None);
+        return err(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "not an address",
+            None,
+        );
     };
     Json(views::prices(
         &app.prices.lock().unwrap(),
@@ -158,7 +168,12 @@ async fn prices<C: Chain>(
 
 async fn user<C: Chain>(State(app): AppState<C>, Path(addr): Path<String>) -> Response {
     let Ok(a) = addr.parse::<Address>() else {
-        return err(StatusCode::BAD_REQUEST, "bad_request", "not an address", None);
+        return err(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "not an address",
+            None,
+        );
     };
     Json(views::user(&app.state.lock().unwrap(), a)).into_response()
 }
@@ -179,7 +194,14 @@ async fn msgs<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> Res
             Some(Value::Array(a)) => a.clone(),
             _ => vec![body.clone()],
         },
-        _ => return err(StatusCode::BAD_REQUEST, "bad_request", "expected [Msg]", None),
+        _ => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "expected [Msg]",
+                None,
+            )
+        }
     };
     if arr.len() > bilauncher_core::MAX_GROUP {
         return err(
@@ -233,20 +255,36 @@ async fn faucet<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> R
         .and_then(Value::as_str)
         .and_then(|s| s.parse::<Address>().ok())
     else {
-        return err(StatusCode::BAD_REQUEST, "bad_request", "address required", None);
+        return err(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "address required",
+            None,
+        );
     };
     let amount = U256::from(FAUCET_BNB * ONE_BNB);
     match app.chain.set_balance(a, amount).await {
-        Ok(()) => Json(json!({ "ok": true, "address": a, "balance": amount.to_string() }))
-            .into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, "faucet_failed", format!("{e:#}"), None),
+        Ok(()) => {
+            Json(json!({ "ok": true, "address": a, "balance": amount.to_string() })).into_response()
+        }
+        Err(e) => err(
+            StatusCode::BAD_GATEWAY,
+            "faucet_failed",
+            format!("{e:#}"),
+            None,
+        ),
     }
 }
 
 async fn poke<C: Chain>(State(app): AppState<C>) -> Response {
     match app.poll().await {
         Ok(_) => Json(status_json(&app)).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, "poll_failed", format!("{e:#}"), None),
+        Err(e) => err(
+            StatusCode::BAD_GATEWAY,
+            "poll_failed",
+            format!("{e:#}"),
+            None,
+        ),
     }
 }
 
@@ -323,7 +361,7 @@ async fn ws_loop<C: Chain>(app: Arc<App<C>>, mut sock: WebSocket) {
             }
             tick = prices.recv() => match tick {
                 Ok(t) => {
-                    let m = json!({"type": "price", "feed": t.feed, "t": t.t, "price": t.price.to_string()});
+                    let m = json!({"type": "price", "feed": t.feed, "t": t.t, "price": t.price.to_string(), "source": t.source});
                     if sock.send(Message::Text(m.to_string().into())).await.is_err() {
                         return;
                     }

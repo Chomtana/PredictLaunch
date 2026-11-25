@@ -8,7 +8,8 @@ use bilauncher_core::state::{Launch, Msg, State};
 use bilauncher_core::{Order, Outcome, Side};
 use serde_json::{json, Value};
 
-pub type Prices = HashMap<Address, VecDeque<(u64, U256)>>;
+/// Per feed: (t unix seconds, 18-dec price, source `"atlas-api"` | `"onchain"`), ascending.
+pub type Prices = HashMap<Address, VecDeque<(u64, U256, &'static str)>>;
 
 fn to_f64(x: U256) -> f64 {
     x.to_string().parse().unwrap_or(0.0)
@@ -90,20 +91,16 @@ pub fn launches(st: &State, now: u64) -> Value {
 pub fn launch_detail(st: &State, prices: &Prices, id: u64, now: u64) -> Option<Value> {
     let l = st.launches.get(&id)?;
     let mut v = launch_summary(st, l, now);
-    v["currentPrice"] = prices
-        .get(&l.feed)
-        .and_then(|q| q.back())
-        .map_or(Value::Null, |(t, p)| json!({"t": t, "price": s(p)}));
+    v["currentPrice"] = prices.get(&l.feed).and_then(|q| q.back()).map_or(
+        Value::Null,
+        |(t, p, src)| json!({"t": t, "price": s(p), "source": src}),
+    );
     v["lastTrades"] = trades(st, id, 20);
     Some(v)
 }
 
 pub fn book(st: &State, id: u64) -> Value {
-    let (bids, asks) = st
-        .books
-        .get(&id)
-        .map(|b| b.levels())
-        .unwrap_or_default();
+    let (bids, asks) = st.books.get(&id).map(|b| b.levels()).unwrap_or_default();
     let lv = |v: Vec<bilauncher_core::book::Level>| -> Vec<Value> {
         v.into_iter()
             .map(|l| json!({"price": l.price, "amount": s(l.amount)}))
@@ -139,8 +136,8 @@ pub fn prices(p: &Prices, feed: Address, since: u64) -> Value {
         p.get(&feed)
             .map(|q| {
                 q.iter()
-                    .filter(|(t, _)| *t >= since)
-                    .map(|(t, price)| json!({"t": t, "price": s(price)}))
+                    .filter(|(t, _, _)| *t >= since)
+                    .map(|(t, price, src)| json!({"t": t, "price": s(price), "source": src}))
                     .collect()
             })
             .unwrap_or_default(),
@@ -262,9 +259,7 @@ fn num<T: TryFrom<U256>>(v: &Value, k: &str) -> Result<T, String> {
             .as_u64()
             .map(U256::from)
             .ok_or_else(|| format!("{k}: not a non-negative integer"))?,
-        Value::String(st) => st
-            .parse::<U256>()
-            .map_err(|e| format!("{k}: {e}"))?,
+        Value::String(st) => st.parse::<U256>().map_err(|e| format!("{k}: {e}"))?,
         _ => return Err(format!("{k}: expected a number or string")),
     };
     T::try_from(u).map_err(|_| format!("{k}: out of range"))

@@ -1,6 +1,6 @@
 //! Runtime around `State`: chain polling, the batch loop, the keeper loop and the price stream.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, watch};
 
 use crate::chain::{Chain, ChainInfo};
 use crate::keeper::{keeper_actions, KeeperAction};
+use crate::prices;
 
 pub struct Settings {
     pub domain: Domain,
@@ -24,6 +25,8 @@ pub struct Settings {
     pub dev_faucet: bool,
     /// First block to read Exchange logs from.
     pub start_block: u64,
+    /// Atlas offchain price API for the chart stream (`None`: onchain feeds only).
+    pub price_api: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +34,8 @@ pub struct PriceTick {
     pub feed: Address,
     pub t: u64,
     pub price: U256,
+    /// `"atlas-api"` or `"onchain"`.
+    pub source: &'static str,
 }
 
 /// Ticks kept per feed (24 h).
@@ -42,7 +47,8 @@ pub struct App<C: Chain> {
     pub settings: Settings,
     pub info: ChainInfo,
     pub state: Mutex<State>,
-    pub prices: Mutex<HashMap<Address, VecDeque<(u64, U256)>>>,
+    pub prices: Mutex<crate::views::Prices>,
+    http: reqwest::Client,
     /// Bumped on every observable change; WebSocket clients push a fresh snapshot.
     pub version: watch::Sender<u64>,
     pub price_tx: broadcast::Sender<PriceTick>,
@@ -75,6 +81,7 @@ impl<C: Chain> App<C> {
             info,
             state: Mutex::new(state),
             prices: Mutex::new(HashMap::new()),
+            http: reqwest::Client::new(),
             version: watch::channel(0).0,
             price_tx: broadcast::channel(1024).0,
             last_error: Mutex::new(None),
@@ -203,7 +210,15 @@ impl<C: Chain> App<C> {
                 }
                 Err(e) => {
                     tracing::warn!("keeper {a:?} failed: {e:#}");
-                    self.backoff.lock().unwrap().insert(a.clone(), now + 2);
+                    // A snapshot is time-critical: the feed must not move past settleTime + SNAP_TOLERANCE
+                    // before it lands (the first try often hits a block still stamped < settleTime), so
+                    // retry it on the next poll.
+                    let retry = if matches!(a, KeeperAction::Snapshot(_)) {
+                        now
+                    } else {
+                        now + 2
+                    };
+                    self.backoff.lock().unwrap().insert(a.clone(), retry);
                     failed_launches.push(a.launch());
                 }
             }
@@ -227,25 +242,60 @@ impl<C: Chain> App<C> {
     }
 
     pub fn record_price(&self, feed: Address, t: u64, price: U256) {
+        self.record_price_from(feed, t, price, prices::SOURCE_ONCHAIN);
+    }
+
+    pub fn record_price_from(&self, feed: Address, t: u64, price: U256, source: &'static str) {
         {
             let mut p = self.prices.lock().unwrap();
             let q = p.entry(feed).or_default();
-            if q.back().is_some_and(|(lt, _)| *lt >= t) {
+            if q.back().is_some_and(|(lt, _, _)| *lt >= t) {
                 return;
             }
-            q.push_back((t, price));
-            while q.front().is_some_and(|(ft, _)| *ft + PRICE_HISTORY_SECS < t) {
+            q.push_back((t, price, source));
+            while q
+                .front()
+                .is_some_and(|(ft, _, _)| *ft + PRICE_HISTORY_SECS < t)
+            {
                 q.pop_front();
             }
         }
-        let _ = self.price_tx.send(PriceTick { feed, t, price });
+        let _ = self.price_tx.send(PriceTick {
+            feed,
+            t,
+            price,
+            source,
+        });
     }
 
+    /// One Atlas API request for every feed; a feed missing from it, or with a point older than
+    /// 30 s, is read onchain instead. Runs in its own task, so it never blocks batching.
     pub async fn poll_prices(&self) {
-        let t = now_ms() / 1000;
+        let now = now_ms();
+        let api = match &self.settings.price_api {
+            Some(url) => match prices::fetch_atlas(&self.http, url).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::debug!("atlas price api: {e:#}");
+                    HashMap::new()
+                }
+            },
+            None => HashMap::new(),
+        };
+        let t = now / 1000;
         for feed in self.price_feeds() {
+            if let Some(p) = api
+                .get(&feed)
+                .filter(|p| p.ts_ms + prices::MAX_API_AGE_MS >= now)
+            {
+                // Appended only when the API timestamp moves (record_price_from drops t <= last t).
+                self.record_price_from(feed, p.ts_ms / 1000, p.price, prices::SOURCE_API);
+                continue;
+            }
             match self.chain.read_feed(feed).await {
-                Ok((price, _updated)) => self.record_price(feed, t, price),
+                Ok((price, _updated)) => {
+                    self.record_price_from(feed, t, price, prices::SOURCE_ONCHAIN)
+                }
                 Err(e) => tracing::debug!("feed {feed}: {e:#}"),
             }
         }
@@ -275,6 +325,7 @@ impl<C: Chain> App<C> {
         let app = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(PRICE_POLL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
                 app.poll_prices().await;

@@ -211,7 +211,13 @@ GET  /api/launches          [LaunchSummary]   (LaunchView fields + upPrice (best
 GET  /api/launch/:id        LaunchDetail      (LaunchSummary + currentPrice, lastTrades)
 GET  /api/book/:id          {bids:[{price, amount}], asks:[...]}   Up terms, price cents, best first
 GET  /api/trades/:id?limit= [{price (Up terms), amount, side:"buy"|"sell" (taker, Up terms), ts}]
-GET  /api/prices/:feed?since=unixSec  [{t, price}]   price = 18-dec decimal string
+GET  /api/prices/:feed?since=unixSec  [{t, price, source?}]   price = 18-dec decimal string;
+                             source "atlas-api" (Atlas offchain API, CoinMarketCap-backed: one POST
+                             https://api.atlasoracle.io/oracle/user/v1/oracle-feed/search
+                             {"page":1,"rows":50,"platformId":293} every 2 s, matched by
+                             supportPlatform[platformId 293].contractAddress, t = API timestamp) or
+                             "onchain" (latestRoundData, t = poll time) when the API fails or its point
+                             is > 30 s old. Chart only: settlement always uses the onchain snapshot.
 GET  /api/user/:addr        {balance, locked, pendingWithdrawals:[...], orders:[OrderView],
                              positions:[{launchId, up, down}], launches:[{launchId, loserShares,
                              claimableTokens}]}
@@ -224,7 +230,7 @@ POST /api/msgs              body: [Msg] (atomic group, ≤ 16). Msg =
 POST /api/faucet            {address} → anvil_setBalance(address, 1000 BNB)   (only with --dev-faucet)
 WS   /ws                    client sends {sub:{launchId?, user?}};
                             server pushes {type:"snapshot", launch?, book?, trades?, user?} on change and
-                            {type:"price", feed, t, price} per tick
+                            {type:"price", feed, t, price, source} per tick
 ```
 Error codes: `bad_signature, bad_amount, bad_price, not_tradable, insufficient_balance,
 insufficient_shares, unknown_order, expired, key_expired, group_too_large`.

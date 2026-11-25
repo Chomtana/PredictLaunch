@@ -43,7 +43,10 @@ fn keeper_snapshots_at_settle() {
 
 #[test]
 fn keeper_resolves_after_lag() {
-    let mut s = state_with(vec![launch_event(0, T, FEED), launch_event(1, T + 100, FEED)]);
+    let mut s = state_with(vec![
+        launch_event(0, T, FEED),
+        launch_event(1, T + 100, FEED),
+    ]);
     s.apply_events(
         vec![ChainEvent::Snapshot {
             launch_id: 0,
@@ -53,7 +56,10 @@ fn keeper_resolves_after_lag() {
         T * 1000,
     );
     assert!(keeper_actions(&s, T + MAX_LAG - 1).is_empty());
-    assert_eq!(keeper_actions(&s, T + MAX_LAG), vec![KeeperAction::Resolve(0)]);
+    assert_eq!(
+        keeper_actions(&s, T + MAX_LAG),
+        vec![KeeperAction::Resolve(0)]
+    );
     // Launch 1 was never snapped: void-resolvable only after the grace window.
     let t1 = T + 100;
     let a = keeper_actions(&s, t1 + MAX_LAG);
@@ -193,6 +199,7 @@ fn settings() -> Settings {
         poll_ms: 1000,
         dev_faucet: false,
         start_block: 0,
+        price_api: None,
     }
 }
 
@@ -242,7 +249,10 @@ async fn failed_batch_restores_state() {
     assert_eq!(app.chain.batches().len(), 1);
     assert_eq!(s.pending_fills(), 0);
     assert!(!s.inflight());
-    assert_eq!(s.confirmed.balance(alice.address()), U256::from(94 * E18 / 10));
+    assert_eq!(
+        s.confirmed.balance(alice.address()),
+        U256::from(94 * E18 / 10)
+    );
     assert_eq!(s.confirmed.position(0, alice.address()), (E18, 0));
     assert_eq!(s.last_batch_id, 1);
 }
