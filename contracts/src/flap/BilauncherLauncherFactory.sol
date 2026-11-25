@@ -82,18 +82,26 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
 
     function launcherDataSchema() external pure override returns (LauncherDataSchema memory schema) {
         schema.description =
-            "bilauncher prediction launch: a binary Up/Down market on an Atlas price feed funds the pool. Winners are paid 1 minus the cut; at the target the raise and 50% of the supply seed the pool and losers claim the other 50%.";
+            "bilauncher prediction launch: a binary market (Up/Down on an Atlas price feed, or YES/NO on a question) funds the pool. Winners are paid 1 minus the cut; at the target the raise and 50% of the supply seed the pool and losers claim the other 50%.";
         schema.isArray = false;
-        FieldDescriptor[] memory f = new FieldDescriptor[](9);
+        FieldDescriptor[] memory f = new FieldDescriptor[](11);
         f[0] = FieldDescriptor({name: "name", fieldType: "string", description: "Token name (1-32 bytes)", decimals: 0});
-        f[1] =
-            FieldDescriptor({name: "symbol", fieldType: "string", description: "Token symbol (1-10 bytes)", decimals: 0});
-        f[2] = FieldDescriptor({name: "imageURI", fieldType: "string", description: "Image / metadata URI", decimals: 0});
+        f[1] = FieldDescriptor({
+            name: "symbol", fieldType: "string", description: "Token symbol (1-10 bytes)", decimals: 0
+        });
+        f[2] =
+            FieldDescriptor({name: "imageURI", fieldType: "string", description: "Image / metadata URI", decimals: 0});
         f[3] = FieldDescriptor({
-            name: "feed", fieldType: "address", description: "Atlas price feed (must be enabled)", decimals: 0
+            name: "feed",
+            fieldType: "address",
+            description: "Atlas price feed (must be enabled); address(0) for a question launch",
+            decimals: 0
         });
         f[4] = FieldDescriptor({
-            name: "strike", fieldType: "uint256", description: "Price to beat: Up wins iff price >= strike", decimals: 18
+            name: "strike",
+            fieldType: "uint256",
+            description: "Price to beat: Up wins iff price >= strike; 0 for a question launch",
+            decimals: 18
         });
         f[5] = FieldDescriptor({
             name: "settleTime",
@@ -102,13 +110,34 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
             decimals: 0
         });
         f[6] = FieldDescriptor({
-            name: "cutBps", fieldType: "uint16", description: "Cut of each winning share: 1000-3000 step 500", decimals: 0
+            name: "cutBps",
+            fieldType: "uint16",
+            description: "Cut of each winning share: 1000-3000 step 500",
+            decimals: 0
         });
         f[7] = FieldDescriptor({
-            name: "target", fieldType: "uint256", description: "Raise (in the quote token) needed to graduate (>= minTarget)", decimals: 18
+            name: "target",
+            fieldType: "uint256",
+            description: "Raise (in the quote token) needed to graduate (>= minTarget)",
+            decimals: 18
         });
         f[8] = FieldDescriptor({
-            name: "salt", fieldType: "bytes32", description: "CREATE2 salt; the token address must end in 0x7777", decimals: 0
+            name: "salt",
+            fieldType: "bytes32",
+            description: "CREATE2 salt; the token address must end in 0x7777",
+            decimals: 0
+        });
+        f[9] = FieldDescriptor({
+            name: "question",
+            fieldType: "string",
+            description: "Question launch (YES/NO): 1-280 bytes with feed 0 and strike 0; empty for a price launch",
+            decimals: 0
+        });
+        f[10] = FieldDescriptor({
+            name: "marketId",
+            fieldType: "uint256",
+            description: "Cournot market id of the question (offchain only; 0 = none); 0 for a price launch",
+            decimals: 0
         });
         schema.fields = f;
     }

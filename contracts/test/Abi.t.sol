@@ -29,5 +29,27 @@ contract AbiTest is Test {
         assertEq(Exchange.TokensClaimed.selector, keccak256("TokensClaimed(uint256,address,uint256)"));
         assertEq(Exchange.BatchSubmitted.selector, keccak256("BatchSubmitted(uint64,uint64,uint256)"));
         assertEq(Exchange.Trade.selector, keccak256("Trade(uint256,bytes32,bytes32,uint8,uint8,uint128)"));
+        assertEq(Exchange.QuestionSet.selector, keccak256("QuestionSet(uint256,string,uint256)"));
+        assertEq(Exchange.OutcomeProposed.selector, keccak256("OutcomeProposed(uint256,uint8,bytes32,address,bool)"));
+        assertEq(Exchange.ResolverSet.selector, keccak256("ResolverSet(address)"));
+        assertEq(Exchange.ChallengeWindowSet.selector, keccak256("ChallengeWindowSet(uint64)"));
+    }
+
+    /// Pins the question-launch function selectors and the LaunchConfig tuple the factory decodes.
+    function test_questionFunctionSelectors() public pure {
+        assertEq(
+            Exchange.registerLaunch.selector,
+            bytes4(
+                keccak256(
+                    "registerLaunch(address,address,address,(string,string,string,address,uint256,uint64,uint16,uint256,bytes32,string,uint256))"
+                )
+            )
+        );
+        assertEq(Exchange.proposeOutcome.selector, bytes4(keccak256("proposeOutcome(uint256,uint8,bytes32)")));
+        assertEq(Exchange.overrideOutcome.selector, bytes4(keccak256("overrideOutcome(uint256,uint8,bytes32)")));
+        assertEq(Exchange.setResolver.selector, bytes4(keccak256("setResolver(address)")));
+        assertEq(Exchange.setChallengeWindow.selector, bytes4(keccak256("setChallengeWindow(uint64)")));
+        assertEq(Exchange.getQuestion.selector, bytes4(keccak256("getQuestion(uint256)")));
+        assertEq(Exchange.isQuestion.selector, bytes4(keccak256("isQuestion(uint256)")));
     }
 }

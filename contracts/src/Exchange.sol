@@ -39,6 +39,10 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint256 public constant MIN_DURATION = 300;
     uint256 public constant MAX_DURATION = 30 days;
     uint256 public constant LOSER_SUPPLY = 500_000_000e18;
+    /// @notice A question launch with no proposal by `settleTime + QUESTION_DEADLINE` resolves Void.
+    uint256 public constant QUESTION_DEADLINE = 7 days;
+    uint256 internal constant MAX_CHALLENGE_WINDOW = 7 days;
+    uint256 internal constant MAX_QUESTION_LEN = 280;
 
     uint8 public constant ACTIVE = 0;
     uint8 public constant GRADUATING = 1;
@@ -71,6 +75,21 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint16 cutBps;
         uint256 target;
         bytes32 salt;
+        /// Empty for a price launch; 1-280 bytes for a question launch (then feed = 0, strike = 0).
+        string question;
+        /// Cournot market id (offchain only; 0 = no match). Must be 0 for a price launch.
+        uint256 marketId;
+    }
+
+    /// @notice A question launch's text and its settlement state (all empty for a price launch).
+    struct QuestionView {
+        string question;
+        uint256 marketId;
+        bool proposed;
+        uint8 proposedOutcome; // 0 YES, 1 NO, 2 VOID
+        uint64 proposedAt;
+        bytes32 evidenceHash;
+        bool final_; // set by the owner's override: resolvable without a challenge window
     }
 
     /// @notice A launch and its single binary market. Also the storage layout.
@@ -173,6 +192,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     /// @notice Set once the rail handed over LOSER_SUPPLY during `graduate`.
     mapping(uint256 id => bool) public loserTokensIn;
 
+    /// @notice Settles question launches by proposal (see `proposeOutcome`).
+    address public resolver;
+    /// @notice Time a resolver proposal waits before `resolve` accepts it (owner-settable, <= 7 days).
+    uint64 public challengeWindow;
+    mapping(uint256 id => QuestionView) internal _questions;
+
     // ---------------------------------------------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------------------------------------------
@@ -213,10 +238,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     event Graduated(uint256 launchId, address token, uint256 raised);
     event Redeemed(uint256 launchId, address user, uint256 credit, uint256 loserShares);
     event TokensClaimed(uint256 launchId, address user, uint256 amount);
-    event Trade(
-        uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount
-    );
+    event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount);
     event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
+    event QuestionSet(uint256 launchId, string question, uint256 marketId);
+    event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
+    event ResolverSet(address resolver);
+    event ChallengeWindowSet(uint64 seconds_);
 
     // ---------------------------------------------------------------------------------------------------------
     // Errors
@@ -266,6 +293,11 @@ contract Exchange is Ownable, ReentrancyGuard {
     error LoserTokensAlreadyIn();
     error BadToken();
     error BadValue();
+    error NotPriceLaunch();
+    error NotQuestionLaunch();
+    error NotResolver();
+    error AlreadyProposed();
+    error BadOutcome();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
@@ -276,6 +308,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         if (quoteToken_ != address(0) && IERC20Decimals(quoteToken_).decimals() != 18) revert BadToken();
         quoteToken = quoteToken_;
         minTarget = 2.15 ether;
+        challengeWindow = 3600;
         DOMAIN_SEPARATOR = Eip712.domainSeparator(block.chainid, address(this));
     }
 
@@ -307,6 +340,18 @@ contract Exchange is Ownable, ReentrancyGuard {
     function setMinTarget(uint256 amount) external onlyOwner {
         minTarget = amount;
         emit MinTargetSet(amount);
+    }
+
+    /// @notice The address allowed to `proposeOutcome` on question launches.
+    function setResolver(address r) external onlyOwner {
+        resolver = r;
+        emit ResolverSet(r);
+    }
+
+    function setChallengeWindow(uint64 s) external onlyOwner {
+        if (s > MAX_CHALLENGE_WINDOW) revert BadConfig();
+        challengeWindow = s;
+        emit ChallengeWindowSet(s);
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -468,13 +513,19 @@ contract Exchange is Ownable, ReentrancyGuard {
         returns (uint256 launchId)
     {
         if (msg.sender != factory) revert NotFactory();
-        if (!feedEnabled[c.feed]) revert FeedNotEnabled();
+        uint256 qLen = bytes(c.question).length;
+        if (qLen == 0) {
+            // price launch (feed = 0 is reserved for question launches)
+            if (c.feed == address(0) || !feedEnabled[c.feed]) revert FeedNotEnabled();
+            if (c.strike == 0 || c.marketId != 0) revert BadConfig();
+        } else if (c.feed != address(0) || c.strike != 0 || qLen > MAX_QUESTION_LEN) {
+            revert BadConfig();
+        }
         uint256 nameLen = bytes(c.name).length;
         uint256 symLen = bytes(c.symbol).length;
-        if (
-            c.strike == 0 || nameLen == 0 || nameLen > 32 || symLen == 0 || symLen > 10 || rail == address(0)
-                || creator == address(0)
-        ) revert BadConfig();
+        if (nameLen == 0 || nameLen > 32 || symLen == 0 || symLen > 10 || rail == address(0) || creator == address(0)) {
+            revert BadConfig();
+        }
         if (c.settleTime < block.timestamp + MIN_DURATION || c.settleTime > block.timestamp + MAX_DURATION) {
             revert BadDuration();
         }
@@ -499,12 +550,19 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit LaunchCreated(
             launchId, creator, rail, token, c.feed, c.strike, c.settleTime, cut, c.target, c.name, c.symbol, c.imageURI
         );
+        if (qLen != 0) {
+            QuestionView storage q = _questions[launchId];
+            q.question = c.question;
+            q.marketId = c.marketId;
+            emit QuestionSet(launchId, c.question, c.marketId);
+        }
     }
 
     /// @notice Record the settlement price. Window `[settleTime, settleTime + GRACE]`; the feed must not have updated
     ///         more than SNAP_TOLERANCE after settleTime. First accepted call wins.
     function snapshot(uint256 id) external {
         LaunchView storage l = _launch(id);
+        if (l.feed == address(0)) revert NotPriceLaunch();
         if (l.status != ACTIVE || l.resolved) revert NotActive();
         if (l.snapped) revert AlreadySnapped();
         uint256 st = l.settleTime;
@@ -539,21 +597,73 @@ contract Exchange is Ownable, ReentrancyGuard {
         return (fb, answer, updatedAt);
     }
 
-    /// @notice Settle the market: after settleTime + MAX_LAG (every batch stamped before settleTime has landed), and
-    ///         once snapped or the snapshot window has closed.
+    /// @notice Question launches only, resolver only: propose the outcome (0 YES, 1 NO, 2 VOID) once, after
+    ///         settleTime + MAX_LAG. `resolve` accepts it after `challengeWindow` unless the owner overrides it.
+    function proposeOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external {
+        if (msg.sender != resolver) revert NotResolver();
+        QuestionView storage q = _openQuestion(id, outcome);
+        if (q.proposed) revert AlreadyProposed();
+        _setProposal(id, q, outcome, evidenceHash, false);
+    }
+
+    /// @notice Question launches only, owner only: set the final outcome (replacing any proposal); resolvable at once.
+    function overrideOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external onlyOwner {
+        _setProposal(id, _openQuestion(id, outcome), outcome, evidenceHash, true);
+    }
+
+    /// @dev Checks shared by proposeOutcome and overrideOutcome (the caller checks resolver / owner first).
+    function _openQuestion(uint256 id, uint8 outcome) internal view returns (QuestionView storage) {
+        LaunchView storage l = _launch(id);
+        if (l.feed != address(0)) revert NotQuestionLaunch();
+        if (l.resolved) revert AlreadyResolved();
+        if (block.timestamp < uint256(l.settleTime) + MAX_LAG) revert TooEarly();
+        if (outcome > VOID) revert BadOutcome();
+        return _questions[id];
+    }
+
+    function _setProposal(uint256 id, QuestionView storage q, uint8 outcome, bytes32 evidenceHash, bool fin) internal {
+        q.proposed = true;
+        q.proposedOutcome = outcome;
+        q.proposedAt = uint64(block.timestamp);
+        q.evidenceHash = evidenceHash;
+        q.final_ = fin;
+        emit OutcomeProposed(id, outcome, evidenceHash, msg.sender, fin);
+    }
+
+    /// @notice Settle the market, after settleTime + MAX_LAG (every batch stamped before settleTime has landed).
+    ///         Price launch: once snapped or the snapshot window has closed (Void if not snapped). Question launch:
+    ///         once the outcome is final (owner override), or a proposal has waited `challengeWindow`, or (Void) no
+    ///         proposal came by settleTime + QUESTION_DEADLINE.
     function resolve(uint256 id) external {
         LaunchView storage l = _launch(id);
         if (l.resolved) revert AlreadyResolved();
         uint256 st = l.settleTime;
-        if (block.timestamp < st + MAX_LAG || (!l.snapped && block.timestamp <= st + GRACE)) revert TooEarly();
+        if (block.timestamp < st + MAX_LAG) revert TooEarly();
+        uint8 outcome;
+        if (l.feed == address(0)) {
+            QuestionView storage q = _questions[id];
+            if (q.final_ || (q.proposed && block.timestamp >= uint256(q.proposedAt) + challengeWindow)) {
+                outcome = q.proposedOutcome;
+            } else if (!q.proposed && block.timestamp > st + QUESTION_DEADLINE) {
+                outcome = VOID;
+            } else {
+                revert TooEarly();
+            }
+        } else {
+            if (!l.snapped && block.timestamp <= st + GRACE) revert TooEarly();
+            outcome = !l.snapped ? VOID : (l.settlePrice >= l.strike ? UP : DOWN);
+        }
+        _settle(id, l, outcome);
+    }
+
+    /// @dev The outcome path both launch kinds share. Void -> Failed; otherwise raised = pairs x cut / 10000, which
+    ///      graduates at the target and fails (raising nothing) below it.
+    function _settle(uint256 id, LaunchView storage l, uint8 outcome) internal {
         l.resolved = true;
         uint256 pairs = l.pairs;
-        uint8 outcome;
-        if (!l.snapped) {
-            outcome = VOID;
+        if (outcome == VOID) {
             l.status = FAILED;
         } else {
-            outcome = l.settlePrice >= l.strike ? UP : DOWN;
             l.totalLoserShares = pairs;
             uint256 raised = uint256(pairs) * l.cutBps / 10_000;
             if (raised >= l.target) {
@@ -662,6 +772,16 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     function getLaunch(uint256 id) external view returns (LaunchView memory) {
         return _launches[id];
+    }
+
+    /// @notice A question launch's text and proposal state; empty for price launches (and unknown ids).
+    function getQuestion(uint256 id) external view returns (QuestionView memory) {
+        return _questions[id];
+    }
+
+    /// @notice True iff `id` is a question launch (its feed is address(0)); false for unknown ids.
+    function isQuestion(uint256 id) external view returns (bool) {
+        return id < _launches.length && _launches[id].feed == address(0);
     }
 
     function isTradable(uint256 id, uint64 ts) public view returns (bool) {
@@ -773,9 +893,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit Trade(id, th, mh, kind, pm, amt);
     }
 
-    function _transfer(uint256 id, uint8 outcome, address seller, address buyer, uint128 amt, uint256 cost)
-        internal
-    {
+    function _transfer(uint256 id, uint8 outcome, address seller, address buyer, uint128 amt, uint256 cost) internal {
         _debit(buyer, cost);
         balanceOf[seller] += cost;
         _subShares(id, seller, outcome, amt);

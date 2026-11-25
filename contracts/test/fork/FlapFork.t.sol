@@ -75,6 +75,8 @@ contract FlapForkTest is Test {
         ex.setFactory(address(factory));
         ex.setFeed(BTCB_FEED, true);
         ex.setOperator(operator, true);
+        ex.setResolver(operator);
+        ex.setChallengeWindow(120);
         vm.stopPrank();
         // Atlas feeds only serve EOAs and authorized callers: authorize the Exchange (mapping at slot 1)
         vm.store(BTCB_FEED, keccak256(abi.encode(address(ex), uint256(1))), bytes32(uint256(1)));
@@ -117,7 +119,16 @@ contract FlapForkTest is Test {
         c.cutBps = 3000;
         c.target = 2.15 ether * _k();
         c.salt = salt;
+        if (questionMode) {
+            c.feed = address(0);
+            c.strike = 0;
+            c.question = "Will BTC close above $100k on 2026-12-31?";
+            c.marketId = 1234;
+        }
     }
+
+    /// Set by the question-launch test: `_cfg` builds a question launch and `_fullFlow` settles it by proposal.
+    bool questionMode;
 
     function _signed(Eip712.Order memory o, uint256 pk) internal view returns (Exchange.SignedOrder memory) {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, ex.orderHash(o));
@@ -163,6 +174,18 @@ contract FlapForkTest is Test {
         ex.setMinTarget(1500 ether);
         assertEq(ex.quoteToken(), USDT);
         _fullFlow(keccak256("bilauncher-fork-usdt"));
+    }
+
+    /// A question launch through the real Portal (the factory decodes the extended LaunchConfig), settled YES by the
+    /// resolver after the challenge window, then graduated like a price launch.
+    function test_questionLaunchOnRealPortal() public {
+        questionMode = true;
+        _fullFlow(keccak256("bilauncher-fork-question"));
+        assertTrue(ex.isQuestion(0));
+        Exchange.QuestionView memory q = ex.getQuestion(0);
+        assertEq(q.question, "Will BTC close above $100k on 2026-12-31?");
+        assertEq(q.marketId, 1234);
+        assertTrue(q.proposed);
     }
 
     /// Amount scale: native amounts are BNB; USDT ones are x1000 (the Portal's pool-quote floor is 1500 USDT, the
@@ -237,11 +260,19 @@ contract FlapForkTest is Test {
         ex.submitBatch(b);
         assertEq(ex.projectedRaised(0), 2.4 ether * k);
 
-        // settle above the strike on the real feed contract
-        vm.warp(c.settleTime);
-        _setFeed(c.strike + 1, c.settleTime);
-        ex.snapshot(0);
-        vm.warp(c.settleTime + 15);
+        if (questionMode) {
+            // settle YES by the resolver's proposal once the challenge window has passed
+            vm.warp(c.settleTime + 15);
+            vm.prank(operator);
+            ex.proposeOutcome(0, 0, keccak256("evidence"));
+            vm.warp(c.settleTime + 15 + 120);
+        } else {
+            // settle above the strike on the real feed contract
+            vm.warp(c.settleTime);
+            _setFeed(c.strike + 1, c.settleTime);
+            ex.snapshot(0);
+            vm.warp(c.settleTime + 15);
+        }
         ex.resolve(0);
         l = ex.getLaunch(0);
         assertEq(l.outcome, 0, "Up");

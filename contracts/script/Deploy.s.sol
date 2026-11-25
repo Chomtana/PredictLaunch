@@ -6,14 +6,15 @@ import {Exchange} from "src/Exchange.sol";
 import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
 
 /// Deploys Exchange + BilauncherLauncherFactory, enables every feed in script/feeds.json (with its Chainlink fallback,
-/// if any), sets the operator, then hands
+/// if any), sets the operator (also the question-launch resolver) and the challenge window, then hands
 /// ownership to OWNER, and writes ../.dev/deploy.json {exchange, factory, chainId, owner, operator}.
 ///
 ///   forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <deployer>
 ///   env: OWNER (default: deployer), OPERATOR (default: deployer),
 ///        QUOTE_TOKEN (default: address(0) = native BNB; testnet: Flap's faucet USDT
 ///        0x190C989D5665a0e404B444b53CAE9AbCfb600157), MIN_TARGET (wei, default: 2.15e18 native,
-///        1500e18 for an ERC20 quote)
+///        1500e18 for an ERC20 quote), CHALLENGE_WINDOW (seconds a resolver proposal waits before a question
+///        launch resolves; default 120 so a dev demo settles in minutes; the contract's own default is 3600)
 ///
 /// Not done here (cheatcodes do not broadcast); on an anvil fork run script/fork-setup.sh afterwards, which
 ///   1. authorizes the Exchange on every Atlas feed (feeds only serve EOAs and authorized callers), and
@@ -50,6 +51,8 @@ contract Deploy is Script {
             if (feeds[i].chainlink != address(0)) ex.setFallbackFeed(feeds[i].addr, feeds[i].chainlink);
         }
         ex.setOperator(operator, true);
+        ex.setResolver(operator);
+        ex.setChallengeWindow(uint64(vm.envOr("CHALLENGE_WINDOW", uint256(120))));
         if (owner != deployer) ex.transferOwnership(owner);
         vm.stopBroadcast();
 
