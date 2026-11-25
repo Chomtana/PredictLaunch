@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+import {Test, console} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/token/ERC20/IERC20.sol";
+import {ClonesUpgradeable} from "@openzeppelin-contracts-upgradeable/proxy/ClonesUpgradeable.sol";
+import {IPortal, IPortalTypes} from "src/flap/IPortal.sol";
+import {Distribution, DistributionTarget} from "src/flap/Distribution.sol";
+import {IStrategy} from "src/flap/IStrategy.sol";
+
+/// Stand-in for our Exchange/launch contract: NOT created via newLauncher, no factory, no admin calls.
+contract DirectLaunch is IStrategy {
+    IPortal constant PORTAL = IPortal(0x000042108465206185A077Edc3F3fd2b49060000);
+    uint256 public received;
+    function lock(bytes32 salt) external payable { PORTAL.lockSalt{value: msg.value}(salt, 0); }
+    function launch(bytes32 salt, uint16 tax, bool noFees) external payable returns (address token) {
+        IPortalTypes.FeeConfig[] memory fees = new IPortalTypes.FeeConfig[](1);
+        fees[0] = IPortalTypes.FeeConfig({feeType: IPortalTypes.FeeSlotType.DEFLATION, bps: 10000, configData: ""});
+        IPortalTypes.CreateTaxTokenParams memory p;
+        p.name = "Loser Coin"; p.symbol = "LOSE"; p.meta = "";
+        p.totalSupply = 1_000_000_000 ether; p.salt = salt; p.quoteToken = address(0); p.dexId = 0;
+        p.poolQuote = msg.value; p.poolToken = 500_000_000 ether;
+        p.buyTaxRate = tax; p.sellTaxRate = tax; p.feeConfigs = noFees ? new IPortalTypes.FeeConfig[](0) : fees;
+        Distribution memory d = Distribution({target: DistributionTarget.EXPLICIT, strategy: address(this), amount: uint128(500_000_000 ether), configData: ""});
+        IPortalTypes.CreatorBuyParams memory cb;
+        (token,) = PORTAL.launchTaxTokenV2{value: msg.value}(p, d, cb);
+    }
+    function initializeDistribution(address token, uint256 amount, bytes calldata, bytes32) external {
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        received = amount;
+    }
+}
+
+contract DirectNoWhitelistTest is Test {
+    address constant PORTAL = 0x000042108465206185A077Edc3F3fd2b49060000;
+    address constant IMPL = 0x7777c57ff7dc441c1715b2e36fa581c48B782222;
+    function test_directLaunch_noWhitelist() public {
+        vm.createSelectFork(vm.envString("BSC_TESTNET_RPC_URL"));
+        DirectLaunch l = new DirectLaunch();
+        bytes32 salt;
+        for (uint256 i;; ++i) {
+            salt = keccak256(abi.encode(address(l), i));
+            if (uint16(uint160(ClonesUpgradeable.predictDeterministicAddress(IMPL, salt, PORTAL))) == 0x7777) break;
+        }
+        vm.deal(address(this), 10 ether);
+        l.lock{value: IPortal(PORTAL).SALT_LOCK_FEE()}(salt);
+        uint16 tax = uint16(vm.envUint("TAX")); bool noFees = vm.envBool("NOFEES");
+        address token = l.launch{value: 2.15 ether}(salt, tax, noFees);
+        console.log("token", token);
+        console.log("held for losers", IERC20(token).balanceOf(address(l)) / 1e18);
+        assertEq(l.received(), 500_000_000 ether);
+    }
+}
