@@ -403,6 +403,8 @@ pub struct OrderEntry {
     pub sig: Vec<u8>,
     pub signer: Address,
     pub seq: u64,
+    /// Cancelled offchain (by its owner or Policy A) or onchain.
+    pub cancelled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,6 +440,8 @@ pub struct State {
     pub orders: HashMap<B256, OrderEntry>,
     /// user → seq → hash of their resting orders (newest = last).
     pub resting: HashMap<Address, BTreeMap<u64, B256>>,
+    /// user → every order hash they placed (oldest first), for the user view.
+    pub user_orders: HashMap<Address, Vec<B256>>,
     pub chain_keys: HashMap<(Address, Address), u64>,
     pub pending_keys: HashMap<(Address, Address), u64>,
     pub cancelled: HashSet<B256>,
@@ -465,6 +469,7 @@ impl State {
             books: HashMap::new(),
             orders: HashMap::new(),
             resting: HashMap::new(),
+            user_orders: HashMap::new(),
             chain_keys: HashMap::new(),
             pending_keys: HashMap::new(),
             cancelled: HashSet::new(),
@@ -606,6 +611,30 @@ impl State {
         self.books.get_mut(&launch)?.cancel(h)
     }
 
+    /// Remove a resting order as cancelled (shown as "cancelled" rather than "expired").
+    fn cancel_resting(&mut self, h: &B256) {
+        if let Some(e) = self.orders.get_mut(h) {
+            e.cancelled = true;
+        }
+        self.remove_resting(h);
+    }
+
+    /// "open" | "filled" | "cancelled" | "expired" for the user view.
+    pub fn order_status(&self, h: &B256) -> &'static str {
+        let Some(e) = self.orders.get(h) else {
+            return "expired";
+        };
+        if self.books.get(&e.order.launch()).is_some_and(|b| b.contains(h)) {
+            "open"
+        } else if self.ledger.filled(h) >= e.order.amount {
+            "filled"
+        } else if e.cancelled || self.cancelled.contains(h) {
+            "cancelled"
+        } else {
+            "expired"
+        }
+    }
+
     /// Drop resting orders of launches that are no longer tradable (settleTime reached or status
     /// changed).
     pub fn drop_settled(&mut self, now_ms: u64) {
@@ -634,7 +663,7 @@ impl State {
             });
             match newest {
                 Some(h) => {
-                    self.remove_resting(&h);
+                    self.cancel_resting(&h);
                 }
                 None => break,
             }
@@ -648,7 +677,7 @@ impl State {
             });
             match over {
                 Some(h) => {
-                    self.remove_resting(&h);
+                    self.cancel_resting(&h);
                 }
                 None => break,
             }
@@ -713,12 +742,12 @@ impl State {
                     .map(|(e, _)| e.hash)
                     .collect();
                 for h in hs {
-                    self.remove_resting(&h);
+                    self.cancel_resting(&h);
                 }
             }
             E::OrderCancelled { order_hash, .. } => {
                 self.cancelled.insert(order_hash);
-                self.remove_resting(&order_hash);
+                self.cancel_resting(&order_hash);
             }
             E::MinNonceBumped { owner, min_nonce } => {
                 self.min_nonce.insert(owner, min_nonce);
@@ -729,7 +758,7 @@ impl State {
                     .map(|(e, _)| e.hash)
                     .collect();
                 for h in hs {
-                    self.remove_resting(&h);
+                    self.cancel_resting(&h);
                 }
             }
             E::LaunchCreated {
@@ -913,8 +942,10 @@ impl State {
                         sig: so.sig.to_vec(),
                         signer,
                         seq: self.next_seq,
+                        cancelled: false,
                     },
                 );
+                self.user_orders.entry(o.owner).or_default().push(h);
             }
             decoded.push(Some((o, h)));
         }
@@ -1228,7 +1259,7 @@ impl State {
                     }
                     return Err(rej(ErrorCode::UnknownOrder, "order does not rest"));
                 }
-                self.remove_resting(&oh);
+                self.cancel_resting(&oh);
                 Ok(MsgResult {
                     order_hash: Some(oh),
                     ..Default::default()
@@ -1297,6 +1328,7 @@ impl State {
                 sig,
                 signer,
                 seq,
+                cancelled: false,
             },
         );
         let res = self
@@ -1315,6 +1347,7 @@ impl State {
         if res.resting > 0 {
             self.resting.entry(o.owner).or_default().insert(seq, h);
         }
+        self.user_orders.entry(o.owner).or_default().push(h);
         let settle = self.launches[&launch].settle_time;
         let mut views = Vec::new();
         for f in &res.fills {
