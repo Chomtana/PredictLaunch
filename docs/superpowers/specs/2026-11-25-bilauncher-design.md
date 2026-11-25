@@ -117,13 +117,23 @@ The user picked B.
 
 1. **Create** (anyone, one transaction): memecoin name, symbol, image URI; game feed + interval,
    where the interval must be allowed for that feed; **graduation target** in USDT (creator's
-   choice, minimum 100 USDT); **deadline** (creator's choice). The game's round 0 starts at the next interval boundary (rounds align
+   choice, at least `minTarget`); **deadline** (creator's choice). `minTarget` is an
+   admin-configurable value, **100 USDT for the mock/demo** (user's decision). It follows Flap's
+   creation floor, `$750 × multiplier × totalSupply / poolToken`, which is $1,500 at 50% in the pool
+   with multiplier 1. Before a real Flap launch, set `minTarget` to the floor for the multiplier
+   Flap agrees during its factory audit. A target below Flap's $3,000 "Graduated" floor (at 50%)
+   still launches, but would show as "New" on Flap. The game's round 0 starts at the next interval boundary (rounds align
    to wall clock: 5m rounds at :00, :05, ...).
 2. **Active**: rounds run back to back. Each round's 10% haircut adds to `raised`.
 3. **Graduate**: when the resolve that pushes `raised ≥ target` lands, the launch graduates in the
    same transaction. That round is the last one, and every round after it is untradable. The whole
    `raised` amount (overshoot included) becomes pool liquidity through the mock Portal. Total
-   supply is fixed (1,000,000,000 tokens): 50% to the pool, 50% claimable by losers.
+   supply is **always 1,000,000,000 tokens and the split is always 50/50** (user's decision, not
+   creator-configurable): `poolToken` = 500M goes into the pool, and the other 500M is handed to the
+   Launcher in the launch transaction (Flap `Distribution` target EXPLICIT, strategy = the Launcher,
+   as in Flap's `MintLauncher`), where losers claim it. **No buy/sell tax** (0%) in the mock. Flap's
+   real `launchTaxTokenV2` needs fee slots that add up to 10000 bps, so tax settings are a later
+   step for the real launch. Opening price = raised / 500M.
 4. **Fail** (user's decision): the creator also sets a **deadline** at creation. If the deadline
    passes before graduation, the launch fails: the game stops (no round starting after the deadline
    is tradable, and the round in progress at the deadline still resolves normally), and **winners get
@@ -224,7 +234,7 @@ The user picked B.
 - **Home**: launch cards with coin, game ("BTC · 5m"), progress bar `raised / target`, live
   round's Up price, and a "Create launch" button.
 - **Create launch**: form (name, symbol, image URL, feed, interval filtered by feed, target ≥
-  100).
+  `minTarget` read from the contract, deadline).
 - **Launch page**: the Polymarket layout in the reference screenshot
   ([assets/polymarket-btc-5m.png](assets/polymarket-btc-5m.png); use it for layout only, not
   Polymarket's branding). Header with coin + game; price
