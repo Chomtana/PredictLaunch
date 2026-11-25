@@ -276,9 +276,11 @@ in live mode is reported as `payment_required`.
   closed markets disappear; confidence is not a reliable filter (wrong cities scored 0.76).
   **`market_info.id` is a per-response handle, not a stable id** (found on the fork run 2026-11-26: the
   same Boston market came back as 6 different ids). The stable key is `(title, end_time)`. Whenever the
-  sequencer needs a launch's market it re-resolves the claim and matches: same id → same (title,
-  end_time) as the remembered market → title equal to the claim → top result if confidence ≥ 0.9 →
-  none; the fresh id is what goes into `market_ids`. The onchain `marketId` is the id seen at creation
+  sequencer needs a launch's market it re-resolves the claim (limit 10) and matches: same id → same
+  (title, end_time) as the remembered market; only when no market is remembered yet: title equal to the
+  claim → top result if confidence ≥ 0.9; else none (a remembered market that is no longer listed
+  matches nothing, so a launch is never tracked or settled on another market). The fresh id is what
+  goes into `market_ids`; the matched `market_info` is remembered in `launch-<id>.json`. The onchain `marketId` is the id seen at creation
   (informational only). `POST /api/cournot/probability` accepts an optional `market: {title, endTime}`
   (the creator's pick) so a preview remembers it.
 - `probability(message, [marketId])` → POST `{message, market_ids}`. Live: parse leniently,
