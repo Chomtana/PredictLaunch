@@ -27,18 +27,24 @@ coin whose liquidity was paid for by the winners. Traders also get fast, CEX-lik
   chart, a countdown, a strip of rounds (past results, the live one, upcoming ones), and Up/Down
   buy and sell. The book behind it works like Polymarket's (see "Order book").
 - Prices come from Atlas Oracle push feeds on BSC testnet (chain 97).
+- **Everything runs on a local anvil fork of BSC testnet** (user's decision). The RPC URL comes
+  from `.env` (`BSC_TESTNET_RPC_URL`, provided by the user). The Atlas feeds and the Flap Portal
+  are the real deployed contracts.
+- **Collateral is native BNB only** (user's decision: no tokens, no approvals).
 - Low latency: a whitelisted backend sequencer matches orders and confirms them instantly. Every
   fill is settled and **fully checked onchain**, with no ZK proof.
 - One wallet signature per session (trading keys), then popup-free betting.
-- Memecoin launch through a **mock** of Flap's Pool Launch flow (Launcher → Portal), shaped so the
-  real Flap Portal can replace it later.
+- Memecoin launch through the **real Flap Pool Launch Portal**, with no mock and **no whitelist**.
+  On testnet, creation is open, so our own contract calls `launchTaxTokenV2` directly (verified
+  on a fork, see below).
 
 ## Non-goals
 
 - ZK proofs, encrypted order data, recovery keys (all of biliquid's ZK machinery is dropped).
-- The real Flap integration. Flap's Pool Launch needs a factory audited and enabled by Flap
-  (docs.flap.sh, "Pool Launch → Basic mechanism"), so we mock it.
-- Mainnet, fees beyond the per-launch cut, multiple collateral tokens, ERC-1155 share tokens.
+- Flap's Launcher/factory route and its audit. They're only needed where Flap pauses creation
+  (mainnet today).
+- Mainnet, live (non-fork) testnet deploys, fees beyond the per-launch cut, any collateral other
+  than native BNB, ERC-1155 share tokens, buy/sell tax on the memecoin.
 - Price-range-on-a-date markets (the first idea). Only recurring Up/Down rounds.
 
 ## Anti-goals (a failure even if it works)
@@ -88,22 +94,56 @@ Known accuracy limit: a slow feed's stored price can be up to its deviation trig
 from the true price. On the slow feeds a round's end price often equals its start price, so Up
 (ties go Up) wins. The 1h/1d-only rule limits this. We accept it.
 
-**Flap Pool Launch** (mocked): a Launcher raises funds under its own rules. When the target is met
-it calls the Portal's `launchTaxTokenV2`. That single transaction creates the token, adds the raised
-quote plus the pool's share of supply as DEX liquidity, and burns the LP. In Flap's `MintLauncher`
-example, half the supply goes to the pool and half goes back to contributors pro rata. We mirror
-that split.
+**Flap Pool Launch** (real Portal; source: docs.flap.sh "Pool Launch" pages and
+`github.com/flap-sh/FlapPoolLaunchVaultExample`, read 2026-11-25). A Launcher raises funds under
+its own rules. When the target is met it calls the Portal's `launchTaxTokenV2`. That single
+transaction creates the token, seeds a PancakeSwap V2 pool with the raised quote plus `poolToken`,
+and burns the LP. Every token not in the pool must be handed out in that same transaction
+(`Distribution`; `ExcessiveRemainder` otherwise). Flap's `MintLauncher` example takes the remainder
+into the Launcher itself (target EXPLICIT, strategy = launcher), and contributors claim it there. We
+do the same, with losers as the contributors. Facts checked onchain:
+- Portal (Hub) `0x000042108465206185A077Edc3F3fd2b49060000`, the same address on 56 and 97.
+  Testnet Guardian `0x00004d58290854c5E9880F4b5B1993c6Ad8b0000`, WBNB
+  `0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd`, V2 router
+  `0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3`, token impl
+  `0x7777c57ff7dc441c1715b2e36fa581c48B782222`.
+- Quote tokens enabled on testnet (`launchQuoteConfig(0, quote)`): **only native BNB**, priced by
+  Flap at a fixed **$700**. USDT, BUSD and WBNB are not enabled there. On mainnet, native, USDT and
+  USD1 are enabled.
+- Creation floors (USD of pool quote): creation `$750 × multiplier × supply / poolToken`,
+  "Graduated" `$1,500 × …`. At 50% in the pool and multiplier 1, that's $1,500 ≈ **2.143 BNB** to
+  launch at all, and $3,000 ≈ 4.286 BNB to show as Graduated on Flap.
+- **No whitelist on testnet.** The testnet Portal (v1.2.0) has creation open (`featureFlags() == 0`),
+  so any contract may call `launchTaxTokenV2` directly. Only the `newLauncher` factory route (and
+  launching while paused, as on mainnet) needs Flap to enable a factory. **Verified 2026-11-25** on a
+  testnet fork: a plain contract, with no factory and no admin calls, locked a salt, launched with
+  1B supply, 500M in the pool and 2.15 BNB native quote, and received the other 500M through its
+  own `IStrategy.initializeDistribution` (distribution EXPLICIT to itself). Token
+  `0xf235…7777`.
+- **Tax must be at least 1%.** 0, 50 and 99 bps revert `InvalidTaxBps`; 100 bps (buy and sell)
+  passes. `feeConfigs` must add up to 10000 bps.
+- Every launch needs a salt whose predicted token address ends in `0x7777`, mined offchain, and
+  locked by the launching contract with `lockSalt{value: SALT_LOCK_FEE()}` (0.005 BNB on testnet).
 
-**Chains.** The demo runs on BSC testnet, against the real Atlas feeds. Local dev runs on anvil with
-`MockFeed` contracts. A small script copies live testnet prices into them, because a fork of
-testnet would freeze the feeds.
+**Chains and the fork.** The demo and every test run on `anvil --fork-url $BSC_TESTNET_RPC_URL`
+(chain 97). Consequences:
+- Test BNB is unlimited: the dev script (and a dev-only faucet endpoint) uses `anvil_setBalance`.
+- A fork freezes the Atlas feeds, so a **feed relay** process copies each used feed's state from
+  live testnet into the fork every ~2 s, but only when it changed. Every SingleFeed checked
+  (BTCB, BNB, ANKR, CAKE) keeps its whole state in **storage slot `0x32`**, packed as
+  `updatedAt (uint48) | startedAt (uint48) | answer (uint80)` from high bits to low. The relay
+  reads it with `eth_getStorageAt` and writes it with `anvil_setStorageAt`. The fork's clock follows
+  wall-clock time, so `updatedAt` stays meaningful. The relay must fail loudly if a feed's slot
+  `0x32` doesn't decode to its `latestAnswer()`.
+- Forge tests use `vm.createSelectFork(BSC_TESTNET_RPC_URL)` and skip when the variable is unset,
+  as Flap's fork tests do. A paid RPC is advised, because fork tests read a lot of state.
 
 ## Approaches considered
 
 - **A. Polymarket-style exchange, one transaction per match.** ERC-1155 shares in user wallets,
-  USDT pulled by approval, operator calls `matchOrders` per match. Closest to Polymarket, but one
+  collateral pulled by approval, operator calls `matchOrders` per match. Closest to Polymarket, but one
   transaction (about 3 s) per fill, gas per fill, and a wallet approval per token.
-- **B. Deposit balance with batched settlement (chosen).** Deposit USDT once and sign orders with a
+- **B. Deposit balance with batched settlement (chosen).** Deposit once and sign orders with a
   browser trading key. The sequencer matches and confirms instantly, then submits a batch of fills
   every few seconds. The contract re-verifies every fill. Shares are internal balances. Reuses
   biliquid's sequencer soft-confirm design, trading keys, deposit/withdraw flow and frontend shell.
@@ -116,32 +156,36 @@ The user picked B.
 
 ### Launch lifecycle
 
-1. **Create** (anyone, one transaction): memecoin name, symbol, image URI; game feed + interval,
+1. **Create** (anyone, one transaction: `Exchange.createLaunch{value: SALT_LOCK_FEE}(...)` with a
+   pre-mined salt; `Exchange` locks the salt with the Portal and registers the game): memecoin name,
+   symbol, image URI; game feed + interval,
    where the interval must be allowed for that feed; **cut** (user's decision): one of 10% (default),
-   15%, 20%, 25% or 30%, stored per launch and fixed for its lifetime; **graduation target** in USDT (creator's
+   15%, 20%, 25% or 30%, stored per launch and fixed for its lifetime; **graduation target** in BNB (creator's
    choice, at least `minTarget`); **deadline** (creator's choice). `minTarget` is an
-   admin-configurable value, **1,500 USDT by default** (user's decision: the mock USDT is free, so
-   the demo can match Flap). That equals Flap's creation floor, `$750 × multiplier × totalSupply /
-   poolToken`, at 50% in the pool with multiplier 1. If Flap agrees a lower multiplier during its
-   factory audit, lower `minTarget` to match. A target below Flap's $3,000 "Graduated" floor (at 50%)
-   still launches, but would show as "New" on Flap. The game's round 0 starts at the next interval boundary (rounds align
+   admin-configurable value (user's decision: $1,500, configurable). Its default is **2.15 BNB**,
+   which is Flap's creation floor at the Portal's $700/BNB, rounded up. Below the floor, the real
+   Portal reverts the launch (`LaunchLiquidityTooLow`). A target under ≈4.29 BNB launches but shows
+   as "New" rather than "Graduated" on Flap. The game's round 0 starts at the next interval boundary (rounds align
    to wall clock: 5m rounds at :00, :05, ...).
 2. **Active**: rounds run back to back. Each round's cut adds to `raised`.
 3. **Graduate**: when the resolve that pushes `raised ≥ target` lands, the launch graduates in the
    same transaction. That round is the last one, and every round after it is untradable. The whole
-   `raised` amount (overshoot included) becomes pool liquidity through the mock Portal. Total
+   `raised` amount (overshoot included) becomes pool liquidity: `Exchange` (which locked the salt, so
+   it must be the one launching) calls `launchTaxTokenV2{value: raised}` with `poolQuote = raised`. Total
    supply is **always 1,000,000,000 tokens and the split is always 50/50** (user's decision, not
    creator-configurable): `poolToken` = 500M goes into the pool, and the other 500M is handed to the
-   Launcher in the launch transaction (Flap `Distribution` target EXPLICIT, strategy = the Launcher,
-   as in Flap's `MintLauncher`), where losers claim it. **No buy/sell tax** (0%) in the mock. Flap's
-   real `launchTaxTokenV2` needs fee slots that add up to 10000 bps, so tax settings are a later
-   step for the real launch. Opening price = raised / 500M.
+   bilauncher contract in the launch transaction (Flap `Distribution` target EXPLICIT, strategy =
+   that contract, implementing `IStrategy.initializeDistribution`), where losers claim it.
+   **Tax: 1% buy and sell, 100% burned** (a single DEFLATION fee slot of 10000 bps). The user wanted
+   no tax, but the Portal rejects anything below 1%. Burning is the closest to "no tax": nobody
+   collects it.
+   Opening price = raised / 500M BNB per token.
 4. **Fail** (user's decision): the creator also sets a **deadline** at creation. If the deadline
    passes before graduation, the launch fails: the game stops (no round starting after the deadline
    is tradable, and the round in progress at the deadline still resolves normally), and **winners get
    the full 1.00**. Each winner reclaims the cut per winning share that was held back. To support
-   this, redeem records `haircutPaid[launch][user] += cut × winningShares`, and the haircut USDT
-   stays in `Exchange` (not the Launcher) until graduation. On failure, `refundHaircut(launch)`
+   this, redeem records `haircutPaid[launch][user] += cut × winningShares`, and the haircut BNB
+   stays in `Exchange` until graduation. On failure, `refundHaircut(launch)`
    credits `haircutPaid` back to the user's balance. Loser shares of a failed launch are worth
    nothing.
 5. **Claim**: a loser's allocation = `loserShares[user] / totalLoserShares × 50% of supply`, where
@@ -174,27 +218,27 @@ The user picked B.
   during the pause.)* The keeper runs resolve(k) and snapshot together right after
   `end + MAX_LAG`. Trading on upcoming rounds is not in scope.
 - **Redeem** (permissionless, for any user list; the keeper batches it): a winning share credits
-  `1 − cut` USDT to the holder's balance; a losing share adds to the holder's `loserShares` for the
+  `1 − cut` BNB to the holder's balance; a losing share adds to the holder's `loserShares` for the
   launch.
 
 ### Order book (Polymarket model)
 
 - One book per round, shown in Up terms. A Down order is the mirror image: Buy Down @ p ≡ Sell Up
   @ (1 − p). The UI shows a single ladder and lets users act in either outcome.
-- Prices in whole cents, 0.01–0.99. Shares are 18-decimal amounts. A pair of shares (1 Up + 1
-  Down) is always backed by exactly 1 USDT.
+- Prices are whole hundredths of 1 BNB, 0.01–0.99. Shares are 18-decimal amounts. A pair of
+  shares (1 Up + 1 Down) is always backed by exactly 1 BNB.
 - Three fill types, priced at the maker's price:
-  - **Transfer**: Buy X vs Sell X. Shares move one way, USDT the other.
+  - **Transfer**: Buy X vs Sell X. Shares move one way, BNB the other.
   - **Mint**: Buy Up @ a + Buy Down @ b, with a + b ≥ 1. Both pay, a new pair is created.
-  - **Merge**: Sell Up @ a + Sell Down @ b, with a + b ≤ 1. A pair is burned and its 1 USDT is
+  - **Merge**: Sell Up @ a + Sell Down @ b, with a + b ≤ 1. A pair is burned and its 1 BNB is
     paid out.
 - Limit orders (resting) and market orders. A market order is IOC with a slippage cap, done the way
   biliquid does it: a place plus a cancel-if-resting group.
 
 ### Onchain settlement (contract `Exchange`)
 
-- **Collateral**: mock USDT (18 dec, mintable by a faucet on testnet). `deposit` credits the
-  internal balance immediately. Withdrawals go through a queue the sequencer must process in its
+- **Collateral**: native BNB. A payable `deposit()` credits the internal balance immediately.
+  Withdrawals and claims send BNB with a reentrancy guard and pull-style accounting. Withdrawals go through a queue the sequencer must process in its
   next batch, auto-cancelling the user's resting orders if needed (biliquid's "Policy A").
   Requests left unprocessed for `FORCE_DELAY` (10 min) can be force-withdrawn by the user, so a
   dead or hostile sequencer cannot trap funds.
@@ -227,7 +271,7 @@ The user picked B.
   every `BATCH_MS` (default 2 s), retry on failure.
 - Keeper loop: snapshot at boundaries, resolve after `MAX_LAG`, redeem, trigger graduation, process
   withdrawals.
-- Price stream: polls each used feed (about every 2 s), keeps a short in-memory history, and pushes
+- Price stream (reads the fork, which the feed relay keeps live): polls each used feed (about every 2 s), keeps a short in-memory history, and pushes
   ticks over WebSocket for the chart.
 - HTTP + WS API in the style of biliquid `api.rs`: launches, book per round, trades, user, msgs.
 
@@ -244,16 +288,26 @@ The user picked B.
   outcomes as ▲/▼ dots, live, upcoming); right panel with Buy/Sell, Up/Down prices, amount
   presets, a "win $X" preview **that shows the `1 − cut` payout** (and the cut as a badge, e.g. "10% to launch"), and the order book. Below that:
   launch progress, "your loser shares → est. tokens", and positions.
-- **Graduated launch page**: game stopped; token address, pool price, "Claim N tokens".
-- **Account**: deposit/withdraw, faucet (testnet), trading-key session.
+- **Graduated launch page**: game stopped; token address, PancakeSwap pool price, "Claim N
+  tokens", link to the token on Flap's terminal format (display only on the fork).
+- **Account**: deposit/withdraw BNB, a dev faucet (fork only, `anvil_setBalance`), trading-key
+  session. Amounts show in BNB, with a USD estimate from the BNB/USD feed.
 
-### Mock Flap
+### Flap integration (real Portal, direct launch, no whitelist)
 
-- `MockFlapPortal.launchTaxTokenV2`-shaped function: deploys a plain ERC20, seeds a minimal
-  constant-product `MockPool` (USDT/token), and burns the LP.
-- `MemeLauncher` (one per launch, created by a `MemeLauncherFactory` the way Flap's
-  `LauncherFactoryBase` works): receives the haircut USDT, calls the Portal at graduation, holds the
-  losers' 50% and serves claims.
+- Vendor only `IPortal` (with `IPortalTypes`), `Distribution` and `IStrategy` from
+  `FlapPoolLaunchVaultExample/src/flap`. No Launcher or factory base is needed.
+- `Exchange` (or a small `LaunchManager` it owns; builder's choice):
+  - `createLaunch`: checks the salt makes a token address ending in `0x7777` (the
+    `ClonesUpgradeable.predictDeterministicAddress(TOKEN_IMPL, salt, PORTAL)` check), then
+    `PORTAL.lockSalt{value: SALT_LOCK_FEE}(salt, 0)` (0.005 BNB on testnet, paid by the creator).
+  - At graduation: `launchTaxTokenV2{value: raised}` with `totalSupply` 1B, `poolToken` 500M,
+    `quoteToken` address(0), `dexId` 0, `poolQuote` = raised, 1% buy/sell tax, one DEFLATION slot of
+    10000 bps, distribution EXPLICIT to itself for 500M, no creator buy.
+  - `initializeDistribution(token, amount, …)` (only from the Portal, once per launch): pulls the
+    500M and books it for that launch's losers. `claim(launchId)` pays them out.
+- Salt mining runs offchain (frontend), the same loop as the verified fork test.
+- Reference: the verified fork test is reproduced in the plan as the first Flap integration test.
 
 ## Left to the builder
 
@@ -264,11 +318,13 @@ The user picked B.
   than it holds, and test it.
 - Gas limits per batch (cap fills per batch), indexer/history storage, chart library (biliquid uses
   lightweight-charts).
-- Whether `MockPool` gets a swap UI. It's a stretch goal: the token must at least be shown as
-  live with a pool price.
+- Whether graduated tokens get a swap UI (through the PancakeSwap V2 router on the fork). It's a
+  stretch goal: the token must at least be shown as live with a pool price.
+- Salt mining (offchain, in the frontend or sequencer; the token address must end in `0x7777`).
 
 ## Build organisation
 
 Three independent tracks behind `SPEC.md`: contracts (Foundry), sequencer (Rust), frontend
 (React). They run as parallel agents once the plan exists, with no agent starting its own agents
-(user's instruction). A final track wires the local dev script and the BSC testnet deploy.
+(user's instruction). A final track wires the dev script: fork anvil, deploy, start the feed
+relay, sequencer, seed bots and frontend.
