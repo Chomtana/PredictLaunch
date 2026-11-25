@@ -108,3 +108,9 @@ cd frontend && pnpm vitest run
 - The fork has chain ID 97, same as the real testnet; PancakeSwap/BscScan links in the UI only work
   for live-testnet launches.
 - The fork's feed prices are as fresh as the relay (2 s polling of the live testnet).
+- Cold-fork stalls: the first graduation on a fresh fork fetches a lot of remote state and anvil
+  stalls for ~15–30 s, long enough for an in-flight batch to exceed `MAX_LAG` and revert (a soft
+  reversal). `seed.ts` and `e2e.ts` warm the path with a no-op `eth_call` right after creating
+  their first launch; a launch created first from the UI on a brand-new fork doesn't get that.
+- The fork RPC URL is passed to `anvil --fork-url`, so it is visible in the local process list
+  (`ps`); it is never written to logs.
