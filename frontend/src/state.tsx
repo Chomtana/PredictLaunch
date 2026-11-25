@@ -7,6 +7,7 @@ import { api, ApiError, big, openFeed, type Book, type Config, type Feed, type L
 import * as chainLib from './lib/chain.ts'
 import { chainFor, errMsg, publicClientFor, type LaunchConfig } from './lib/chain.ts'
 import { authorizeKeyMsg, randomNonce, signAuthorizeKey, signCancel, signOrder, type Domain, type Msg, type TypedSigner } from './lib/eip712.ts'
+import { kindOf } from './lib/labels.ts'
 import { mineSalt, predictToken, randomSeed } from './lib/salt.ts'
 import { accountOf, clearKey, loadKey, newKey, saveKey, type StoredKey } from './lib/tradingKey.ts'
 import { connectDev, connectInjected, discoverInjected, type InjectedInfo, type Wallet } from './lib/wallet.ts'
@@ -124,7 +125,7 @@ function useAppState() {
   const watchedFeeds = useMemo(() => {
     const s = new Set<string>()
     if (bnbFeed) s.add(lc(bnbFeed))
-    for (const l of launches ?? []) s.add(lc(l.feed))
+    for (const l of launches ?? []) if (kindOf(l) === 'price') s.add(lc(l.feed))
     for (const f of config?.feeds ?? []) s.add(lc(f.address))
     return [...s]
   }, [bnbFeed, launches, config])

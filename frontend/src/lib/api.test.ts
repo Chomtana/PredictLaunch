@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, poolOf, progressOf } from './api.ts'
+import { api, ApiError, cournotError, poolOf, progressOf, toUnixSec } from './api.ts'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -20,6 +20,32 @@ describe('api client', () => {
     expect(e).toBeInstanceOf(ApiError)
     expect((e as ApiError).code).toBe('not_tradable')
     expect((e as ApiError).index).toBe(0)
+  })
+
+  it('Cournot calls: paths, bodies, friendly errors', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ markets: [] })))
+    vi.stubGlobal('fetch', fetchMock)
+    await api.cournotResolve('Will it rain?')
+    await api.cournotProbability('Will it rain?', '2849008')
+    await api.oracle(4)
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit | undefined][]
+    expect(calls.map((c) => c[0])).toEqual(['/api/cournot/resolve', '/api/cournot/probability', '/api/launch/4/oracle'])
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ message: 'Will it rain?' })
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({ message: 'Will it rain?', marketId: 2849008 })
+
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: 'payment_required', message: '402' }), { status: 402 }))
+    expect(cournotError(await api.cournotProbability('q', 1).catch((x: unknown) => x))).toMatch(/payment/i)
+    expect(cournotError(new ApiError('cournot_unavailable', ''))).toMatch(/unreachable/)
+    expect(cournotError(new ApiError('bad_question', ''))).toMatch(/280 bytes/)
+    expect(cournotError(new ApiError('http_503', ''))).toMatch(/unreachable/)
+  })
+
+  it('toUnixSec reads ISO, seconds and ms', () => {
+    expect(toUnixSec('2026-12-09T23:59:00Z')).toBe(Date.UTC(2026, 11, 9, 23, 59) / 1000)
+    expect(toUnixSec(1_795_000_000)).toBe(1_795_000_000)
+    expect(toUnixSec('1795000000')).toBe(1_795_000_000)
+    expect(toUnixSec(1_795_000_000_000)).toBe(1_795_000_000)
+    expect(toUnixSec(null)).toBeNaN()
   })
 
   it('pool and progress use the projection while active, raised after', () => {

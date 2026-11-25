@@ -28,3 +28,13 @@ them, or tell us so we can change the client (`src/lib/api.ts` is the only place
     became "switching feed re-prefills the strike" and "settlement < 5 min disables submit". The F3
     "Next round opening…" test became "after settlement shows Settling…". The F4 "failed panel shows
     haircutPaid" test became the A1 failed/void messages.
+12. **Question launches (Cournot).** `kind` is read from `LaunchSummary.kind`; when absent, `feed ==
+    address(0)` marks a question launch. Cournot `startTime`/`endTime`, OracleRecord `fetchedAt` and
+    proposal `proposedAt`/`challengeEndsAt` are accepted as ISO strings, unix seconds or unix ms.
+    `POST /api/cournot/probability` is sent `{message, marketId}` with `marketId` as a JSON number (0 for
+    "No matching market"). Error codes `cournot_unavailable`, `payment_required`, `bad_question` (and a
+    bare HTTP 402/429/5xx) map to friendly messages. `basis` is rendered by shape only: flat objects as
+    one-row tables, arrays of objects as tables (union of keys; a row's `url` links its `summary`),
+    string lists as lists, anything nested as path | value rows; the array form is a table. The
+    settlement panel shows the evidence hash and the `settlement` record inline (the SPEC has no URL
+    for `settle-<id>.json`). The probability preview is only ever called from its button.

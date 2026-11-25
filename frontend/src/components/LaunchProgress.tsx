@@ -3,6 +3,7 @@ import { compact } from '../lib/format.ts'
 import { fmtBnb, fmtShares, LOSER_SUPPLY, num18, usd } from '../lib/units.ts'
 import { ProgressBar } from './ui.tsx'
 import { useQuote } from '../state.tsx'
+import { labelsFor } from '../lib/labels.ts'
 
 /** Tokens a loser gets: loserShares / totalLoserShares × 500M. */
 export const tokensFor = (loserShares: bigint, totalLoserShares: bigint) =>
@@ -31,6 +32,7 @@ export function LaunchProgress({
   // While live, every open pair has one loser share; pairs = totalLoserShares at settlement.
   const total = active ? pairs : big(l.totalLoserShares)
   const est = (s: bigint) => compact(num18(tokensFor(s, total)))
+  const [U, D] = labelsFor(l).names
   return (
     <div className="panel section">
       <h3>{active ? 'Projected pool' : 'Pool'}</h3>
@@ -73,7 +75,7 @@ export function LaunchProgress({
         </div>
       ) : active && position && (position.up > 0n || position.down > 0n) && total > 0n ? (
         <div className="banner info" style={{ marginTop: 14, marginBottom: 0 }}>
-          If Up loses, your {fmtShares(position.up)} Up → ≈ {est(position.up)} ${l.symbol}. If Down loses, your {fmtShares(position.down)} Down → ≈{' '}
+          If {U} loses, your {fmtShares(position.up)} {U} → ≈ {est(position.up)} ${l.symbol}. If {D} loses, your {fmtShares(position.down)} {D} → ≈{' '}
           {est(position.down)} ${l.symbol}.
         </div>
       ) : null}

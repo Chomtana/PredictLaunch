@@ -29,6 +29,11 @@ export const exchangeAbi = parseAbi([
   'function position(uint256 id, address u) view returns (uint128 up, uint128 down)',
   'function withdrawQueueLength() view returns (uint64)',
   'function withdrawProcessed() view returns (uint64)',
+  'function isQuestion(uint256 id) view returns (bool)',
+  'function getQuestion(uint256 id) view returns ((string question, uint256 marketId, bool proposed, uint8 proposedOutcome, uint64 proposedAt, bytes32 evidenceHash, bool final_))',
+  'function overrideOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash)',
+  'function resolver() view returns (address)',
+  'function challengeWindow() view returns (uint64)',
 ])
 
 export const erc20Abi = parseAbi([
@@ -45,7 +50,7 @@ export const portalAbi = parseAbi([
   'function SALT_LOCK_FEE() view returns (uint256)',
 ])
 
-/** abi.encode(LaunchConfig) — SPEC: (name, symbol, imageURI, feed, strike, settleTime, cutBps, target, salt). */
+/** abi.encode(LaunchConfig) — SPEC: (name, symbol, imageURI, feed, strike, settleTime, cutBps, target, salt, question, marketId). */
 export const LAUNCH_CONFIG_ABI = [
   {
     type: 'tuple',
@@ -59,6 +64,8 @@ export const LAUNCH_CONFIG_ABI = [
       { name: 'cutBps', type: 'uint16' },
       { name: 'target', type: 'uint256' },
       { name: 'salt', type: 'bytes32' },
+      { name: 'question', type: 'string' },
+      { name: 'marketId', type: 'uint256' },
     ],
   },
 ] as const
@@ -76,7 +83,14 @@ export interface LaunchConfig {
   /** wei */
   target: bigint
   salt: Hex
+  /** Question launch: the exact claim (1–280 bytes); "" for a price launch. */
+  question: string
+  /** Cournot market id; 0n = no match, and always 0n for a price launch. */
+  marketId: bigint
 }
+
+/** Price launches pass these; question launches pass feed 0 and strike 0 instead (SPEC "Question launches"). */
+export const PRICE_LAUNCH_EXTRA = { question: '', marketId: 0n } as const
 
 export const encodeLaunchConfig = (c: LaunchConfig): Hex => encodeAbiParameters(LAUNCH_CONFIG_ABI, [c])
 

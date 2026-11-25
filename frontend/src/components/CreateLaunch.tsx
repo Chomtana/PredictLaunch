@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Address } from 'viem'
-import type { Config } from '../lib/api.ts'
-import type { LaunchConfig } from '../lib/chain.ts'
+import { api, cournotError, toUnixSec, type Config, type CournotMarket, type OracleRecord } from '../lib/api.ts'
+import { NATIVE, type LaunchConfig } from '../lib/chain.ts'
 import { asset, duration, settleLabel } from '../lib/format.ts'
 import { fmtBnb, fmtPrice, num18, parseBnb, usd } from '../lib/units.ts'
+import { PRICE_LABELS, QUESTION_LABELS } from '../lib/labels.ts'
 import { useApp } from '../state.tsx'
 import { CoinAvatar, Spinner } from './ui.tsx'
+import { MarketRow, OracleRecordView, SourceBadge } from './Cournot.tsx'
 
 export type LaunchDraft = Omit<LaunchConfig, 'salt'>
 
@@ -37,6 +39,19 @@ const PRESETS: [string, number][] = [
   ['1w', 7 * 86400],
 ]
 
+export const QUESTION_MAX_BYTES = 280
+const bytes = (s: string) => new TextEncoder().encode(s).length
+
+/** The two Cournot calls the form makes (injectable for tests). */
+export interface CournotClient {
+  resolve: (message: string) => Promise<{ markets: CournotMarket[] }>
+  probability: (message: string, marketId: number | string) => Promise<OracleRecord>
+}
+const defaultCournot: CournotClient = { resolve: (m) => api.cournotResolve(m), probability: (m, id) => api.cournotProbability(m, id) }
+
+/** id "none" = the creator chose "No matching market" (marketId 0). */
+type Choice = { id: string; market: CournotMarket | null } | null
+
 interface FormProps {
   config: Config
   priceOf: (feed: Address) => bigint | null
@@ -45,9 +60,12 @@ interface FormProps {
   connected: boolean
   onSubmit: (cfg: LaunchDraft) => Promise<unknown> | void
   busy?: string | null
+  cournot?: CournotClient
 }
 
-export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy }: FormProps) {
+export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot }: FormProps) {
+  const [kind, setKind] = useState<'price' | 'question'>('price')
+  const isQ = kind === 'question'
   const q = config.quoteSymbol ?? 'BNB'
   const minTarget = BigInt(config.minTarget)
   const [name, setName] = useState('')
@@ -60,6 +78,15 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
   const [cut, setCut] = useState(config.cuts.includes(1000) ? 1000 : (config.cuts[0] ?? 1000))
   const [target, setTarget] = useState(() => trimZeros(fmtBnb(minTarget, 4).replace(/,/g, '')))
   const [, tick] = useState(0)
+  // question mode
+  const [questionText, setQuestionText] = useState('')
+  const [markets, setMarkets] = useState<CournotMarket[] | null>(null)
+  const [finding, setFinding] = useState(false)
+  const [pick, setPick] = useState<Choice>(null)
+  const [preview, setPreview] = useState<OracleRecord | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [cnErr, setCnErr] = useState<string | null>(null)
+  const [settleNote, setSettleNote] = useState<string | null>(null)
 
   const current = priceOf(feed)
   // Prefill the strike with the feed's current price until the user edits it.
@@ -88,19 +115,40 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     else if (nb > 32) e.name = 'At most 32 bytes'
     if (sb === 0) e.symbol = 'Required'
     else if (sb > 10) e.symbol = 'At most 10 bytes'
-    if (!strikeWei || strikeWei <= 0n) e.strike = 'Enter a price above 0'
+    if (isQ) {
+      const qb = bytes(questionText.trim())
+      if (qb === 0) e.question = 'Required'
+      else if (qb > QUESTION_MAX_BYTES) e.question = `At most ${QUESTION_MAX_BYTES} bytes`
+      if (!pick) e.market = 'Find markets, then pick one (or "No matching market")'
+    } else if (!strikeWei || strikeWei <= 0n) e.strike = 'Enter a price above 0'
     if (!Number.isFinite(settleSec)) e.settle = 'Pick a date and time'
     else if (dur < config.minDuration) e.settle = `At least ${duration(config.minDuration)} from now`
     else if (dur > config.maxDuration) e.settle = `At most ${duration(config.maxDuration)} from now`
     if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtBnb(minTarget, 2)} ${q} (Flap's pool floor)`
     return e
-  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q])
+  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q, isQ, questionText, pick])
   const valid = Object.keys(errors).length === 0
 
+  const L = isQ ? QUESTION_LABELS.names : PRICE_LABELS.names
   const delta = current && strikeWei ? (num18(strikeWei) / num18(current) - 1) * 100 : null
 
   const submit = () => {
     if (!valid || !connected || busy) return
+    if (isQ) {
+      void onSubmit({
+        name: name.trim(),
+        symbol: symbol.trim(),
+        imageURI: image.trim(),
+        feed: NATIVE,
+        strike: 0n,
+        settleTime: BigInt(settleSec),
+        cutBps: cut,
+        target: targetWei!,
+        question: questionText.trim(),
+        marketId: pick && pick.id !== 'none' ? BigInt(pick.id) : 0n,
+      })
+      return
+    }
     void onSubmit({
       name: name.trim(),
       symbol: symbol.trim(),
@@ -110,7 +158,53 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
       settleTime: BigInt(settleSec),
       cutBps: cut,
       target: targetWei!,
+      question: '',
+      marketId: 0n,
     })
+  }
+
+  const claim = questionText.trim()
+  const findMarkets = async () => {
+    if (!claim || bytes(claim) > QUESTION_MAX_BYTES || finding) return
+    setFinding(true)
+    setCnErr(null)
+    setPick(null)
+    setPreview(null)
+    try {
+      const r = await cournot.resolve(claim)
+      setMarkets(r.markets ?? [])
+    } catch (e) {
+      setMarkets(null)
+      setCnErr(cournotError(e))
+    } finally {
+      setFinding(false)
+    }
+  }
+  const choose = (c: Choice) => {
+    setPick(c)
+    setPreview(null)
+    setCnErr(null)
+    setSettleNote(null)
+    const end = c?.market ? toUnixSec(c.market.endTime) : NaN
+    if (!Number.isFinite(end)) return
+    const d = end - Date.now() / 1000
+    if (d >= config.minDuration && d <= config.maxDuration) {
+      setSettle(toLocalInput(new Date(end * 1000)))
+      setSettleNote(`prefilled with the market's end time (${settleLabel(end)})`)
+    } else setSettleNote(`the market ends ${settleLabel(end)}, outside the ${duration(config.minDuration)} to ${duration(config.maxDuration)} limit: pick a time yourself`)
+  }
+  // A paid call in live mode: only on the explicit button, never automatically.
+  const getOdds = async () => {
+    if (!pick || !claim || previewing) return
+    setPreviewing(true)
+    setCnErr(null)
+    try {
+      setPreview(await cournot.probability(claim, pick.id === 'none' ? 0 : pick.id))
+    } catch (e) {
+      setCnErr(cournotError(e))
+    } finally {
+      setPreviewing(false)
+    }
   }
 
   const setStrikeFromCurrent = (pct: number) => {
@@ -129,10 +223,25 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         }}
       >
         <h2>Create a launch</h2>
-        <p className="muted lead">
-          Launch a memecoin on a price prediction. Traders bet Up or Down; the cut from winners fills your coin's pool. If the pool reaches the target at
-          settlement, the coin launches on Flap and losers get the tokens.
-        </p>
+        <div className="seg" role="group" aria-label="Launch kind" style={{ marginBottom: 10 }}>
+          <button type="button" aria-pressed={!isQ} className={!isQ ? 'on' : ''} onClick={() => setKind('price')}>
+            Price
+          </button>
+          <button type="button" aria-pressed={isQ} className={isQ ? 'on' : ''} onClick={() => setKind('question')}>
+            Question
+          </button>
+        </div>
+        {isQ ? (
+          <p className="muted lead">
+            Launch a memecoin on a yes/no question. Traders bet YES or NO; the Cournot oracle supplies the odds and the settlement evidence. If the pool
+            reaches the target at settlement, the coin launches on Flap and losers get the tokens.
+          </p>
+        ) : (
+          <p className="muted lead">
+            Launch a memecoin on a price prediction. Traders bet Up or Down; the cut from winners fills your coin's pool. If the pool reaches the target at
+            settlement, the coin launches on Flap and losers get the tokens.
+          </p>
+        )}
 
         <div className="section-label">Coin</div>
         <div className="row2">
@@ -148,6 +257,74 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         </Field>
 
         <div className="section-label">Prediction</div>
+        {isQ ? (
+          <>
+            <Field
+              label="Question"
+              id="cl-question"
+              err={questionText ? errors.question : undefined}
+              hint={`${bytes(claim)}/${QUESTION_MAX_BYTES} bytes · the exact claim sent to Cournot and stored onchain`}
+            >
+              <div className="input-with-chips">
+                <textarea
+                  id="cl-question"
+                  rows={2}
+                  value={questionText}
+                  placeholder="Will it rain in Boston on Nov 27, 2026?"
+                  onChange={(e) => {
+                    setQuestionText(e.target.value)
+                    setPreview(null)
+                  }}
+                />
+                <div className="chips">
+                  <button type="button" className="chip" disabled={!claim || bytes(claim) > QUESTION_MAX_BYTES || finding} onClick={() => void findMarkets()}>
+                    {finding ? <Spinner size={11} /> : null} Find markets
+                  </button>
+                </div>
+              </div>
+            </Field>
+            {markets && (
+              <div className="field">
+                <span className="field-label">Cournot market</span>
+                <span className="field-hint">Match confidence is unreliable: read the titles and pick the market that really is your question.</span>
+                <div className="cn-markets" role="radiogroup" aria-label="Cournot market">
+                  {markets.length === 0 && <div className="muted small">No open markets matched.</div>}
+                  {markets.map((m) => (
+                    <MarketRow key={String(m.id)} m={m} on={pick?.id === String(m.id)} onPick={() => choose({ id: String(m.id), market: m })} />
+                  ))}
+                  <label className={`cn-market ${pick?.id === 'none' ? 'on' : ''}`}>
+                    <input type="radio" name="cn-market" checked={pick?.id === 'none'} onChange={() => choose({ id: 'none', market: null })} />
+                    <div className="cn-market-body">
+                      <div className="cn-market-title">No matching market</div>
+                      <div className="muted small">Launch without a Cournot market (marketId 0).</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+            {pick && (
+              <div className="field">
+                <div className="input-with-chips">
+                  <button type="button" className="btn" disabled={previewing} onClick={() => void getOdds()}>
+                    {previewing ? <Spinner /> : null} Get Cournot odds
+                  </button>
+                  {config.cournotMode === 'mock' ? (
+                    <SourceBadge source="mock" />
+                  ) : (
+                    <span className="muted small">May be a paid Cournot call; the launch reuses this preview.</span>
+                  )}
+                </div>
+                {preview && <OracleRecordView r={preview} />}
+              </div>
+            )}
+            {cnErr && (
+              <div className="field-err" role="alert">
+                {cnErr}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
         <Field label="Feed" id="cl-feed" hint={current != null ? `Now ${fmtPrice(current)} · Atlas oracle` : 'Atlas oracle price feed'}>
           <select
             id="cl-feed"
@@ -190,7 +367,14 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
             </div>
           </div>
         </Field>
-        <Field label="Settlement time" id="cl-settle" err={errors.settle} hint={!errors.settle ? `in ${duration(dur)}` : undefined}>
+          </>
+        )}
+        <Field
+          label="Settlement time"
+          id="cl-settle"
+          err={errors.settle}
+          hint={!errors.settle ? `in ${duration(dur)}${isQ && settleNote ? ` · ${settleNote}` : ''}` : undefined}
+        >
           <div className="input-with-chips">
             <input id="cl-settle" type="datetime-local" value={settle} onChange={(e) => setSettle(e.target.value)} />
             <div className="chips">
@@ -251,7 +435,13 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
             </div>
           </div>
           <div className="lc-question">
-            {coin} ≥ {strikeWei ? fmtPrice(strikeWei) : '$…'} by {Number.isFinite(settleSec) ? settleLabel(settleSec) : '…'}?
+            {isQ ? (
+              claim || 'Your question?'
+            ) : (
+              <>
+                {coin} ≥ {strikeWei ? fmtPrice(strikeWei) : '$…'} by {Number.isFinite(settleSec) ? settleLabel(settleSec) : '…'}?
+              </>
+            )}
           </div>
           <div className="preview-rows">
             <div>
@@ -274,10 +464,11 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         </div>
         <ol className="how">
           <li>
-            <b>Trade.</b> Up and Down shares trade 1¢–99¢ until settlement. A pair (1 Up + 1 Down) is backed by 1 {q}.
+            <b>Trade.</b> {L[0]} and {L[1]} shares trade 1¢–99¢ until settlement. A pair (1 {L[0]} + 1 {L[1]}) is backed by 1 {q}.
           </li>
           <li>
-            <b>Settle.</b> At settlement the oracle decides. Winners redeem {(10000 - cut) / 100}¢; the {cut / 100}% cut goes to the pool.
+            <b>Settle.</b>{' '}
+            {isQ ? 'After settlement the resolver proposes the outcome from Cournot evidence; it is final after a challenge window.' : 'At settlement the oracle decides.'} Winners redeem {(10000 - cut) / 100}¢; the {cut / 100}% cut goes to the pool.
           </li>
           <li>
             <b>Graduate.</b> Pool ≥ target: 1B tokens are minted through Flap, 500M + the pool seed PancakeSwap, losers claim the other 500M.

@@ -3,6 +3,7 @@ import { useApp } from '../state.tsx'
 import { FailedPanel } from './FailedPanel.tsx'
 import { GraduatedPanel } from './GraduatedPanel.tsx'
 import type { Phase } from './LaunchCard.tsx'
+import { labelsFor } from '../lib/labels.ts'
 
 /** Shown above the progress once the market has settled: graduated / launching / failed / void. */
 export function OutcomePanel({ l, phase, mine }: { l: LaunchSummary; phase: Phase; mine: UserLaunch | null }) {
@@ -24,7 +25,7 @@ export function OutcomePanel({ l, phase, mine }: { l: LaunchSummary; phase: Phas
   }
   if (phase === 'failed' || phase === 'void') {
     const projected = (big(l.pairs) * BigInt(n(l.cutBps))) / 10000n
-    return <FailedPanel isVoid={phase === 'void'} outcome={n(l.outcome)} raised={projected} target={big(l.target)} />
+    return <FailedPanel isVoid={phase === 'void'} outcome={n(l.outcome)} raised={projected} target={big(l.target)} labels={labelsFor(l)} />
   }
   return null
 }

@@ -2,11 +2,12 @@ import { useState } from 'react'
 import type { Book, Level } from '../lib/api.ts'
 import { mirror } from '../lib/market.ts'
 import { cost, fmtBnb, fmtShares } from '../lib/units.ts'
+import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
 const DEPTH = 8
 
 /** One Up-terms ladder; the Down view is the same book mirrored (Down ask = 100 − Up bid). */
-export function OrderBook({ book }: { book: Book | null }) {
+export function OrderBook({ book, labels = PRICE_LABELS }: { book: Book | null; labels?: OutcomeLabels }) {
   const [view, setView] = useState<0 | 1>(0)
   const b = book ? (view === 0 ? book : mirror(book)) : null
   const asks = (b?.asks ?? []).slice(0, DEPTH)
@@ -20,10 +21,10 @@ export function OrderBook({ book }: { book: Book | null }) {
         <h3>Order book</h3>
         <div className="seg">
           <button className={view === 0 ? 'on' : ''} onClick={() => setView(0)}>
-            Trade Up
+            Trade {labels.names[0]}
           </button>
           <button className={view === 1 ? 'on' : ''} onClick={() => setView(1)}>
-            Trade Down
+            Trade {labels.names[1]}
           </button>
         </div>
       </div>

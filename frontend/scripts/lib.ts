@@ -49,6 +49,8 @@ const balanceSlot = (who: Address) => keccak256(encodeAbiParameters([{ type: 'ad
 
 export const exchangeExtraAbi = parseAbi([
   'event LaunchCreated(uint256 launchId, address creator, address rail, address token, address feed, uint256 strike, uint64 settleTime, uint16 cutBps, uint256 target, string name, string symbol, string imageURI)',
+  'event QuestionSet(uint256 launchId, string question, uint256 marketId)',
+  'event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_)',
   'function claimableTokens(uint256 id, address user) view returns (uint256)',
   'function loserShares(uint256 id, address user) view returns (uint256)',
 ])
@@ -260,6 +262,17 @@ export interface Bot {
   acct: LocalAccount
   key: LocalAccount
   resting: Map<Hex, bigint>
+}
+
+/** "Nov 27, 2026": tomorrow's date as Cournot's daily US-city rain markets name it (US Eastern). */
+export function tomorrowLabel(now = Date.now()): string {
+  return new Date(now + 86400_000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })
+}
+
+/** Cournot probability (0..1) → a question launch's quoting centre in cents, clamped 3..97; 50 when unknown. */
+export function oracleCents(p: number | null | undefined): number {
+  if (p == null || !Number.isFinite(p)) return 50
+  return Math.min(97, Math.max(3, Math.round(p * 100)))
 }
 
 /** Standard normal CDF (Abramowitz–Stegun 7.1.26). */
