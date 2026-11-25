@@ -90,9 +90,16 @@ cd frontend && pnpm vitest run
 ## Known limitations
 
 - **Atlas feeds only serve authorized contracts.** On live testnet the Atlas team must call
-  `setAuthorizedCallers([exchange], [true])` on each feed a launch uses. Until then `snapshot`
-  reverts, the market goes Void after the grace window, everyone redeems at 0.50 and the launch
-  fails. On the fork, `fork-setup.sh` writes the storage slot instead.
+  `setAuthorizedCallers([exchange], [true])` on each feed a launch uses. Until then `snapshot` falls
+  back to Chainlink for BTCB/USD, BNB/USD, CAKE/USD and USDT/USD (`setFallbackFeed`, set by the
+  deploy script; the price is scaled from 8 to 18 decimals and `SnapshotSource` names the source).
+  Launches on any other feed can't snapshot: the market goes Void after the grace window, everyone
+  redeems at 0.50 and the launch fails. On the fork, `fork-setup.sh` authorizes the Exchange on
+  Atlas, so Atlas is used.
+- **Chart vs settlement prices.** The chart streams the Atlas offchain API (CoinMarketCap-backed,
+  ~10 s updates; onchain feed fallback), while settlement always uses the onchain snapshot. On the
+  fork the onchain feeds are copied from live testnet every 2 s by the feed relay, so the two agree
+  closely but not to the wei.
 - **Flap factory gating.** Flap must enable our factory with `setLauncherFactoryMultiplier` on
   mainnet; the testnet Portal currently does not enforce it (see `contracts/SPEC-NOTES.md`).
 - **The salt lock is taken at creation** (`Portal.newLauncher` charges `SALT_LOCK_FEE` and locks the
