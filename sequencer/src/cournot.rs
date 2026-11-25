@@ -168,6 +168,76 @@ impl Market {
     }
 }
 
+/// The stable identity of a Cournot market: (title, end_time). `market_info.id` is NOT stable: the
+/// same market comes back with a different id on every `resolve` call (seen live 2026-11-26).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarketKey {
+    pub title: String,
+    pub end_time: String,
+}
+
+impl MarketKey {
+    /// From a `market_info` (`title`, `end_time`) or an API pick (`title`, `endTime`).
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let title = v.get("title")?.as_str()?.to_string();
+        let end_time = v
+            .get("end_time")
+            .or_else(|| v.get("endTime"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        (!title.is_empty()).then_some(Self { title, end_time })
+    }
+
+    pub fn of(m: &Market) -> Self {
+        Self {
+            title: m.title.clone(),
+            end_time: m.end_time.clone(),
+        }
+    }
+
+    /// A minimal `market_info` holding the key.
+    pub fn to_info(&self) -> Value {
+        json!({"title": self.title, "end_time": self.end_time})
+    }
+}
+
+fn norm(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Minimum `matching_confidence` for taking the top result when nothing else identifies the market.
+pub const TOP_MATCH_CONFIDENCE: f64 = 0.9;
+
+/// The market in fresh `resolve` results: the same id (only valid within one response, but cheap to
+/// try); else the same (title, end_time) as `remembered`; else, with nothing remembered, a title
+/// equal to the claim (case/whitespace-insensitive), else the top result if its confidence ≥ 0.9.
+/// A remembered market that is no longer listed matches nothing (it closed): never a stand-in.
+pub fn pick_market<'a>(
+    results: &'a [Market],
+    market_id: u64,
+    remembered: Option<&MarketKey>,
+    claim: &str,
+) -> Option<&'a Market> {
+    if market_id != 0 {
+        if let Some(m) = results.iter().find(|m| m.id == market_id) {
+            return Some(m);
+        }
+    }
+    if let Some(k) = remembered {
+        return results.iter().find(|m| MarketKey::of(m) == *k);
+    }
+    let c = norm(claim);
+    results.iter().find(|m| norm(&m.title) == c).or_else(|| {
+        results
+            .first()
+            .filter(|m| m.matching_confidence.unwrap_or(0.0) >= TOP_MATCH_CONFIDENCE)
+    })
+}
+
 /// Normalized oracle answer (SPEC "Oracle record"). Every field is always serialized (null if unset).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,8 +245,11 @@ pub struct OracleRecord {
     pub launch_id: Option<u64>,
     /// The exact text sent to Cournot.
     pub claim: String,
+    /// The id the creator picked (onchain `marketId`): informational only, Cournot ids change on
+    /// every response.
     pub market_id: u64,
-    /// `market_info` (Cournot's own field names) or null.
+    /// The matched `market_info` (Cournot's own field names) or null. Its (title, end_time) is the
+    /// market's stable key: later lookups (tracker, resolver) match by it.
     pub market: Option<Value>,
     /// YES probability, 0..1.
     pub probability: Option<f64>,
@@ -382,19 +455,20 @@ impl Cournot {
     }
 
     /// One market by id from a `resolve(claim)`, if Cournot still lists it.
+    /// The launch's (or preview's) market in a fresh `resolve(claim, 10)`, matched by `pick_market`.
+    /// `None` without a resolve call when there is no market at all (`market_id == 0`, nothing
+    /// remembered).
     pub async fn find_market(
         &self,
         claim: &str,
         market_id: u64,
+        remembered: Option<&MarketKey>,
     ) -> Result<Option<Market>, CournotError> {
-        if market_id == 0 {
+        if market_id == 0 && remembered.is_none() {
             return Ok(None);
         }
-        Ok(self
-            .resolve(claim, MAX_RESOLVE_LIMIT)
-            .await?
-            .into_iter()
-            .find(|m| m.id == market_id))
+        let results = self.resolve(claim, MAX_RESOLVE_LIMIT).await?;
+        Ok(pick_market(&results, market_id, remembered, claim).cloned())
     }
 
     /// The raw live `probability` body.
@@ -417,16 +491,23 @@ impl Cournot {
     }
 
     /// A probability record for `claim` (mode-aware).
+    ///
+    /// `market_id` is the id the creator saw (kept in the record as-is, informational: Cournot ids
+    /// are per-response handles). The market is re-found with `find_market` (`remembered` = its
+    /// (title, end_time), if known) and its *fresh* id goes into `market_ids`. The record's `market`
+    /// holds the matched `market_info`, or just `remembered` when nothing matched.
     pub async fn probability(
         &self,
         claim: &str,
         market_id: u64,
+        remembered: Option<&MarketKey>,
         launch_id: Option<u64>,
     ) -> Result<OracleRecord, CournotError> {
         check_question(claim)?;
+        let fallback_market = remembered.map(MarketKey::to_info);
         match self.cfg.mode {
             Mode::Mock => {
-                let m = self.find_market(claim, market_id).await?;
+                let m = self.find_market(claim, market_id, remembered).await?;
                 let p = m.as_ref().and_then(|m| m.yes_price).unwrap_or(0.5);
                 let summary = match &m {
                     Some(m) => format!("{} trades at {p}", m.title),
@@ -436,7 +517,7 @@ impl Cournot {
                     launch_id,
                     claim: claim.into(),
                     market_id,
-                    market: m.map(|m| m.info),
+                    market: m.map(|m| m.info).or(fallback_market),
                     probability: Some(p),
                     result: Some(json!({"point_estimate": p, "mock": true})),
                     basis: Some(json!({
@@ -450,18 +531,20 @@ impl Cournot {
                 })
             }
             Mode::Live => {
-                let body = self.probability_raw(claim, market_id).await?;
+                // Free: re-find the market for its fresh id (and its info for the UI). If Cournot
+                // no longer lists it, the given id is sent as is.
+                let found = self
+                    .find_market(claim, market_id, remembered)
+                    .await
+                    .ok()
+                    .flatten();
+                let send_id = found.as_ref().map_or(market_id, |m| m.id);
+                let body = self.probability_raw(claim, send_id).await?;
                 let parsed = parse_probability(&body);
-                let mut market = market_in_body(&body, market_id);
-                if market.is_none() && market_id != 0 {
-                    // Best effort and free: the market's info for the UI.
-                    market = self
-                        .find_market(claim, market_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|m| m.info);
-                }
+                let market = found
+                    .map(|m| m.info)
+                    .or_else(|| market_in_body(&body, send_id))
+                    .or(fallback_market);
                 Ok(OracleRecord {
                     launch_id,
                     claim: claim.into(),

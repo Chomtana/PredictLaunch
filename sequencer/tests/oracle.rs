@@ -132,11 +132,11 @@ async fn opening_reuses_the_preview_cache() {
     let dir = temp_dir("preview");
     let app = app_with(vec![], &m.base, Mode::Live, None, dir.clone()).await;
     // A creator previews the odds ...
-    let p = app.oracle_preview(Q, 7).await.unwrap();
+    let p = app.oracle_preview(Q, 7, None).await.unwrap();
     assert_eq!(p.probability, Some(0.31));
     assert_eq!(p.launch_id, None);
     // ... a second preview of the same (claim, marketId) is served from the cache ...
-    app.oracle_preview(Q, 7).await.unwrap();
+    app.oracle_preview(Q, 7, None).await.unwrap();
     assert_eq!(m.state().probability_calls, 1);
     // ... and so is the launch's opening record.
     for e in question_launch_events(0, now_secs() + 3600, Q, 7) {
@@ -149,7 +149,7 @@ async fn opening_reuses_the_preview_cache() {
     assert_eq!((r.launch_id, r.probability), (Some(0), Some(0.31)));
     assert_eq!(app.oracle.brief(0).unwrap().probability, Some(0.31));
     // A different market id is a different preview.
-    app.oracle_preview(Q, 8).await.unwrap();
+    app.oracle_preview(Q, 8, None).await.unwrap();
     assert_eq!(m.state().probability_calls, 2);
 }
 
@@ -214,7 +214,7 @@ async fn price_launches_get_no_oracle_calls() {
 
 #[tokio::test]
 async fn tracker_appends_the_market_price() {
-    let m = MockCournot::start(vec![market_json(7, "Rain in Boston?", 0.3, 0.9)]).await;
+    let m = MockCournot::start(vec![market_json(7, "Rain in Boston?", 0.3, 0.85)]).await;
     let mut ev = question_launch_events(0, now_secs() + 3600, Q, 7);
     ev.extend(question_launch_events(
         1,
@@ -225,7 +225,7 @@ async fn tracker_appends_the_market_price() {
     ev.extend(question_launch_events(2, now_secs() + 3600, "Gone?", 99));
     let app = app_with(ev, &m.base, Mode::Live, None, temp_dir("track")).await;
     app.oracle_track(100).await;
-    m.set_markets(vec![market_json(7, "Rain in Boston?", 0.45, 0.9)]);
+    m.set_markets(vec![market_json(7, "Rain in Boston?", 0.45, 0.85)]);
     app.oracle_track(160).await;
     assert_eq!(
         app.oracle.store.prices(0),
@@ -400,4 +400,90 @@ async fn proposed_launch_is_left_alone() {
     let app = app_with(ev, &m.base, Mode::Mock, None, temp_dir("proposed")).await;
     assert!(app.oracle_resolve(settle + MAX_LAG + 5).await.is_empty());
     assert_eq!(m.state().resolve_calls, 0);
+}
+
+// ------------------------------------------------------------------ ids are per-response handles
+
+use bilauncher_sequencer::cournot::MarketKey;
+
+fn rain_key() -> MarketKey {
+    MarketKey {
+        title: "Rain in Boston?".into(),
+        end_time: "2026-12-09T23:59:00Z".into(),
+    }
+}
+
+#[tokio::test]
+async fn picked_market_is_carried_from_preview_to_tracker_and_resolver() {
+    let m = MockCournot::start(vec![
+        market_json(5, "Other", 0.2, 0.5),
+        market_json(7, "Rain in Boston?", 0.4, 0.6),
+    ])
+    .await;
+    m.set_rotate_ids(true);
+    let app = app_with(vec![], &m.base, Mode::Mock, None, temp_dir("rotate")).await;
+    // The creator picked id 7 from an earlier answer: that id never comes back.
+    let p = app.oracle_preview(Q, 7, Some(&rain_key())).await.unwrap();
+    assert_eq!(p.probability, Some(0.4));
+    assert_eq!(p.market.as_ref().unwrap()["title"], "Rain in Boston?");
+    assert_eq!(
+        p.market.as_ref().unwrap()["end_time"],
+        "2026-12-09T23:59:00Z"
+    );
+    let settle = now_secs() - 100;
+    for e in question_launch_events(0, settle, Q, 7) {
+        app.chain.push(e);
+    }
+    app.poll().await.unwrap();
+    app.oracle_open().await;
+    assert_eq!(app.remembered_market(0), Some(rain_key()));
+    // Tracker: new ids on every call, matched by (title, end_time).
+    app.oracle_track(100).await;
+    m.set_markets(vec![
+        market_json(7, "Rain in Boston?", 0.99, 0.6),
+        market_json(5, "Other", 0.2, 0.5),
+    ]);
+    app.oracle_track(160).await;
+    assert_eq!(
+        app.oracle.store.prices(0),
+        vec![
+            PricePoint { t: 100, price: 0.4 },
+            PricePoint {
+                t: 160,
+                price: 0.99
+            }
+        ]
+    );
+    let r = app.oracle_resolve(settle + MAX_LAG).await;
+    assert!(matches!(r[0].0, KeeperAction::Propose(0, 0, _)));
+}
+
+#[tokio::test]
+async fn first_match_is_remembered_in_the_launch_file() {
+    let m = MockCournot::start(vec![market_json(7, Q, 0.4, 0.6)]).await;
+    m.set_rotate_ids(true);
+    m.set_probability(402, json!({}));
+    let app = app_with(
+        question_launch_events(0, now_secs() + 3600, Q, 7),
+        &m.base,
+        Mode::Live,
+        None,
+        temp_dir("remember"),
+    )
+    .await;
+    app.oracle_open().await;
+    // The opening call failed (402): an error record, no market yet.
+    let o = app.oracle.store.opening(0).unwrap();
+    assert!(o.error.is_some());
+    assert_eq!(o.market, None);
+    // The tracker's first match (title == claim) is remembered in launch-0.json ...
+    app.oracle_track(100).await;
+    assert_eq!(app.remembered_market(0).unwrap().title, Q);
+    assert_eq!(
+        app.oracle.store.opening(0).unwrap().market.unwrap()["id"],
+        2_000_007
+    );
+    // ... and later answers (new ids again) are matched by that key.
+    app.oracle_track(160).await;
+    assert_eq!(app.oracle.store.prices(0).len(), 2);
 }

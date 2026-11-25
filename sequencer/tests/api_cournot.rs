@@ -350,3 +350,26 @@ async fn launch_oracle_endpoint() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn probability_accepts_the_creators_pick() {
+    let t = T::new(Mode::Mock, 0, vec![]).await;
+    t.mock.set_rotate_ids(true);
+    let (s, v) = t
+        .req(
+            "POST",
+            "/api/cournot/probability",
+            Some(json!({
+                "message": Q,
+                "marketId": 7,
+                "market": {"title": "Rain in Boston on Nov 27?", "endTime": "2026-12-09T23:59:00Z"}
+            })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["probability"], 0.3);
+    assert_eq!(v["marketId"], 7);
+    assert_eq!(v["market"]["title"], "Rain in Boston on Nov 27?");
+    assert_eq!(v["market"]["end_time"], "2026-12-09T23:59:00Z");
+    assert_eq!(v["market"]["id"], 1_000_007);
+}

@@ -33,7 +33,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::app::{now_ms, App};
 use crate::chain::Chain;
-use crate::cournot::{check_question, CournotError};
+use crate::cournot::{check_question, CournotError, MarketKey};
 use crate::views;
 
 pub const FAUCET_BNB: u128 = 1000;
@@ -416,7 +416,9 @@ async fn cournot_probability<C: Chain>(
             Err(e) => return err(StatusCode::BAD_REQUEST, "bad_request", e, None),
         },
     };
-    match app.oracle_preview(&q, market_id).await {
+    // Optional `market: {title, endTime}`: the creator's pick from /api/cournot/resolve.
+    let picked = body.get("market").and_then(MarketKey::from_json);
+    match app.oracle_preview(&q, market_id, picked.as_ref()).await {
         Ok(r) => Json(r).into_response(),
         Err(e) => cournot_err(&e),
     }

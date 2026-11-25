@@ -21,7 +21,9 @@ use serde_json::{json, Value};
 
 use crate::app::{now_ms, App};
 use crate::chain::Chain;
-use crate::cournot::{Cournot, CournotConfig, CournotError, Mode, OracleRecord, SOURCE_LIVE};
+use crate::cournot::{
+    Cournot, CournotConfig, CournotError, MarketKey, Mode, OracleRecord, SOURCE_LIVE,
+};
 use crate::keeper::{decide, proposals_due, KeeperAction};
 
 pub const DEFAULT_ORACLE_DIR: &str = ".dev/oracle";
@@ -282,10 +284,13 @@ fn question_launches<C: Chain>(app: &App<C>) -> Vec<(u64, String, u64, bool)> {
 
 impl<C: Chain> App<C> {
     /// `POST /api/cournot/probability`: the cached preview for `(claim, marketId)`, else one call.
+    /// `picked` = the creator's pick from `/api/cournot/resolve` (title, end time): the market is
+    /// matched by it, since Cournot ids change between responses.
     pub async fn oracle_preview(
         &self,
         claim: &str,
         market_id: u64,
+        picked: Option<&MarketKey>,
     ) -> Result<OracleRecord, CournotError> {
         crate::cournot::check_question(claim)?;
         let o = &self.oracle;
@@ -293,7 +298,10 @@ impl<C: Chain> App<C> {
         if let Some(r) = o.store.preview(claim, market_id) {
             return Ok(r);
         }
-        let r = o.cournot.probability(claim, market_id, None).await?;
+        let r = o
+            .cournot
+            .probability(claim, market_id, picked, None)
+            .await?;
         if let Err(e) = o.store.write_preview(&r) {
             tracing::warn!("oracle: writing a preview: {e}");
         }
@@ -324,7 +332,7 @@ impl<C: Chain> App<C> {
                 }
                 None => {
                     calls += 1;
-                    match o.cournot.probability(&q, market_id, Some(id)).await {
+                    match o.cournot.probability(&q, market_id, None, Some(id)).await {
                         Ok(r) => r,
                         Err(e) => {
                             tracing::warn!("oracle: opening call for launch {id}: {e}");
@@ -341,16 +349,46 @@ impl<C: Chain> App<C> {
         calls
     }
 
+    /// The launch's market key, remembered in `launch-<id>.json` `market` (from the creator's preview
+    /// or the first match).
+    pub fn remembered_market(&self, id: u64) -> Option<MarketKey> {
+        self.oracle
+            .store
+            .opening(id)?
+            .market
+            .as_ref()
+            .and_then(MarketKey::from_json)
+    }
+
+    /// Store the first matched `market_info` in `launch-<id>.json` (if that file exists).
+    fn remember_market(&self, id: u64, info: &Value) {
+        let s = &self.oracle.store;
+        if let Some(mut r) = s.opening(id).filter(|r| r.market.is_none()) {
+            r.market = Some(info.clone());
+            if let Err(e) = s.write_opening(id, &r) {
+                tracing::warn!("oracle: writing launch-{id}.json: {e}");
+            }
+        }
+    }
+
     /// Tracker: for each unresolved question launch with a market, `resolve(question)` and append
     /// the market's YES price when Cournot still lists it.
     pub async fn oracle_track(&self, now: u64) {
         let o = &self.oracle;
         for (id, q, market_id, resolved) in question_launches(self) {
-            if resolved || market_id == 0 {
+            if resolved {
                 continue;
             }
-            match o.cournot.find_market(&q, market_id).await {
+            let remembered = self.remembered_market(id);
+            match o
+                .cournot
+                .find_market(&q, market_id, remembered.as_ref())
+                .await
+            {
                 Ok(Some(m)) => {
+                    if remembered.is_none() {
+                        self.remember_market(id, &m.info);
+                    }
                     if let Some(price) = m.yes_price {
                         if let Err(e) = o.store.append_price(id, PricePoint { t: now, price }) {
                             tracing::warn!("oracle: writing price-{id}.json: {e}");
@@ -484,7 +522,12 @@ impl<C: Chain> App<C> {
         if o.store.has_recheck(id) || !(o.mode() == Mode::Mock || o.cournot.has_key()) {
             return None;
         }
-        let rec = match o.cournot.probability(q, market_id, Some(id)).await {
+        let remembered = self.remembered_market(id);
+        let rec = match o
+            .cournot
+            .probability(q, market_id, remembered.as_ref(), Some(id))
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("oracle: resolver call for launch {id}: {e}");

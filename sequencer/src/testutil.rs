@@ -311,6 +311,9 @@ pub struct MockCournotState {
     pub last_probability_body: Option<serde_json::Value>,
     /// `COURNOT-API-KEY` of the last probability request.
     pub last_key: Option<String>,
+    /// Like the real service: every `resolve` answer gives each market a new id
+    /// (`id + 1_000_000 × call number`).
+    pub rotate_ids: bool,
 }
 
 /// A local Cournot stand-in on `127.0.0.1:<random>` (tests never reach the real service).
@@ -344,8 +347,17 @@ async fn mock_resolve(
     let mut s = st.lock().unwrap();
     s.resolve_calls += 1;
     s.last_resolve_body = Some(body);
+    let mut markets = s.markets.clone();
+    if s.rotate_ids {
+        let bump = 1_000_000 * s.resolve_calls as u64;
+        for m in &mut markets {
+            if let Some(id) = m["market_info"]["id"].as_u64() {
+                m["market_info"]["id"] = serde_json::json!(id + bump);
+            }
+        }
+    }
     axum::Json(serde_json::json!({
-        "code": 0, "msg": "Success", "data": {"markets": s.markets, "charged": false}
+        "code": 0, "msg": "Success", "data": {"markets": markets, "charged": false}
     }))
 }
 
@@ -399,6 +411,10 @@ impl MockCournot {
 
     pub fn set_probability(&self, status: u16, body: serde_json::Value) {
         self.inner.lock().unwrap().probability = Some((status, body));
+    }
+
+    pub fn set_rotate_ids(&self, on: bool) {
+        self.inner.lock().unwrap().rotate_ids = on;
     }
 
     pub fn set_markets(&self, markets: Vec<serde_json::Value>) {
