@@ -47,7 +47,7 @@ async function createPair(): Promise<Mkt[]> {
   ]
   const out: Mkt[] = []
   for (const d of defs) {
-    const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: '' })
+    const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: '', question: '', marketId: 0n })
     console.log(`seed: launch #${id} ${d.symbol} token ${token} strike ${Number(d.strike) / 1e18} settles in ${Number(d.settleTime - now)} s`)
     out.push({ id, rail, strike: d.strike, settleTime: d.settleTime, feed: d.feed, target: d.target, cutBps: d.cutBps })
   }

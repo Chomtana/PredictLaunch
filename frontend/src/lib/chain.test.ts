@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, type Address, type Hex } from 'viem'
+import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, encodeFunctionData, type Address, type Hex } from 'viem'
 import { createLaunch, encodeLaunchConfig, LAUNCH_CONFIG_ABI, portalAbi, type LaunchConfig } from './chain.ts'
 
 const cfg: LaunchConfig = {
@@ -12,7 +12,11 @@ const cfg: LaunchConfig = {
   cutBps: 1000,
   target: 2_150_000_000_000_000_000n,
   salt: '0x00000000000000000000000000000000000000000000000000000000000000ab',
+  question: '',
+  marketId: 0n,
 }
+
+const ZERO = '0x0000000000000000000000000000000000000000' as Address
 
 describe('chain', () => {
   it('encodes LaunchConfig as abi.encode(tuple)', () => {
@@ -26,6 +30,28 @@ describe('chain', () => {
     expect(c.cutBps).toBe(1000)
     expect(c.target).toBe(cfg.target)
     expect(c.salt).toBe(cfg.salt)
+    expect(c.question).toBe('')
+    expect(c.marketId).toBe(0n)
+  })
+
+  it('appends question and marketId at the end of the tuple', () => {
+    const q: LaunchConfig = { ...cfg, feed: ZERO, strike: 0n, question: 'Will it rain in Boston on Nov 27, 2026?', marketId: 2849008n }
+    const data = encodeLaunchConfig(q)
+    const [c] = decodeAbiParameters(LAUNCH_CONFIG_ABI, data)
+    expect(c.feed).toBe(ZERO)
+    expect(c.strike).toBe(0n)
+    expect(c.question).toBe(q.question)
+    expect(c.marketId).toBe(2849008n)
+    // field order: the two new members are the last components
+    const names = LAUNCH_CONFIG_ABI[0].components.map((x) => x.name)
+    expect(names.slice(-2)).toEqual(['question', 'marketId'])
+    expect(names.slice(0, 9)).toEqual(['name', 'symbol', 'imageURI', 'feed', 'strike', 'settleTime', 'cutBps', 'target', 'salt'])
+    // it matches a hand-built encoding with the Solidity types in order
+    const manual = encodeAbiParameters(
+      [{ type: 'tuple', components: [{ type: 'string' }, { type: 'string' }, { type: 'string' }, { type: 'address' }, { type: 'uint256' }, { type: 'uint64' }, { type: 'uint16' }, { type: 'uint256' }, { type: 'bytes32' }, { type: 'string' }, { type: 'uint256' }] }],
+      [[q.name, q.symbol, q.imageURI, q.feed, q.strike, q.settleTime, q.cutBps, q.target, q.salt, q.question, q.marketId]],
+    )
+    expect(data).toBe(manual)
   })
 
   it('createLaunch calls Portal.newLauncher{value: saltLockFee}(factory, data)', async () => {

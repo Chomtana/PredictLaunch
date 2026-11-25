@@ -110,6 +110,8 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
       settleTime: BigInt(settleSec),
       cutBps: cut,
       target: targetWei!,
+      question: '',
+      marketId: 0n,
     })
   }
 
