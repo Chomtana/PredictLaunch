@@ -455,7 +455,18 @@ impl Chain for RpcChain {
             for log in logs {
                 let topics = log.topics().to_vec();
                 let data = log.data().data.clone();
-                let ts = log.block_timestamp.unwrap_or(0);
+                let mut ts = log.block_timestamp.unwrap_or(0);
+                // A question proposal's challenge window runs from its block time: read the block
+                // when the node leaves `blockTimestamp` out of its logs.
+                let proposed =
+                    <IExchange::OutcomeProposed as alloy_sol_types::SolEvent>::SIGNATURE_HASH;
+                if ts == 0 && topics.first() == Some(&proposed) {
+                    if let Some(n) = log.block_number {
+                        if let Ok(Some(b)) = self.provider.get_block_by_number(n.into()).await {
+                            ts = b.header.timestamp;
+                        }
+                    }
+                }
                 match decode_log(&topics, &data, ts) {
                     Some(ChainEvent::BatchSubmitted {
                         batch_id,
