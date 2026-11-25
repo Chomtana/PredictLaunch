@@ -53,7 +53,8 @@ a {
   text-decoration: none;
 }
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: var(--text);
   background: var(--bg-2);
@@ -65,7 +66,8 @@ select {
   transition: border-color 0.15s;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent);
 }
 input[type='datetime-local'] {
@@ -1479,6 +1481,11 @@ main {
 }
 .cn-market input {
   margin-top: 3px;
+  width: auto;
+  flex: none;
+}
+textarea {
+  resize: vertical;
 }
 .cn-market-title {
   font-weight: 600;
