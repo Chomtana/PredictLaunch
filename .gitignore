@@ -1,0 +1,31 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+contracts/broadcast/**/dry-run/
+contracts/lib/
+contracts/dependencies/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+dist/
+
+# Local demo state and logs
+.dev/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+*.tsbuildinfo
