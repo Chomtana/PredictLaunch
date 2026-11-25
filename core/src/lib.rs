@@ -6,8 +6,10 @@
 //! revert.
 
 pub mod abi;
+pub mod batcher;
 pub mod book;
 pub mod eip712;
+pub mod state;
 pub mod types;
 
 pub use eip712::{order_hash, recover, Domain};

@@ -5,6 +5,8 @@
 //! the sequencer decodes logs by signature with `alloy-dyn-abi` (see `sequencer/src/chain.rs`).
 //! The signatures (topic0) do not depend on indexing.
 
+#![allow(clippy::too_many_arguments)]
+
 alloy_sol_types::sol! {
     #[derive(Debug, PartialEq, Eq)]
     struct Order {
