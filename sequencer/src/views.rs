@@ -8,6 +8,9 @@ use bilauncher_core::state::{Launch, Msg, State};
 use bilauncher_core::{Order, Outcome, Side};
 use serde_json::{json, Value};
 
+/// launch → opening oracle probability/source (question launches).
+pub type OracleBriefs = HashMap<u64, crate::oracle::OracleBrief>;
+
 /// Per feed: (t unix seconds, 18-dec price, source `"atlas-api"` | `"onchain"`), ascending.
 pub type Prices = HashMap<Address, VecDeque<(u64, U256, &'static str)>>;
 
@@ -33,7 +36,7 @@ pub fn up_price(st: &State, id: u64) -> Value {
         .map_or(Value::Null, |t| json!(t.up_price))
 }
 
-pub fn launch_summary(st: &State, l: &Launch, now: u64) -> Value {
+pub fn launch_summary(st: &State, l: &Launch, now: u64, oracle: &OracleBriefs) -> Value {
     let projected = st.projected_raised(l.id);
     let basis = if l.resolved { l.raised } else { projected };
     let progress = if l.target.is_zero() {
@@ -41,6 +44,7 @@ pub fn launch_summary(st: &State, l: &Launch, now: u64) -> Value {
     } else {
         to_f64(basis) / to_f64(l.target)
     };
+    let brief = oracle.get(&l.id).filter(|_| l.is_question());
     let pairs = if l.resolved {
         l.resolved_pairs
     } else {
@@ -75,22 +79,33 @@ pub fn launch_summary(st: &State, l: &Launch, now: u64) -> Value {
         "projectedRaised": s(projected),
         "progress": progress,
         "tradable": st.tradable(l.id, now),
+        "kind": if l.is_question() { "question" } else { "price" },
+        "question": if l.is_question() { json!(l.question) } else { Value::Null },
+        "marketId": if l.is_question() { json!(l.market_id) } else { Value::Null },
+        "oracleProbability": brief.and_then(|b| b.probability),
+        "oracleSource": brief.map(|b| b.source.clone()),
     })
 }
 
-pub fn launches(st: &State, now: u64) -> Value {
+pub fn launches(st: &State, now: u64, oracle: &OracleBriefs) -> Value {
     Value::Array(
         st.launches
             .values()
             .rev()
-            .map(|l| launch_summary(st, l, now))
+            .map(|l| launch_summary(st, l, now, oracle))
             .collect(),
     )
 }
 
-pub fn launch_detail(st: &State, prices: &Prices, id: u64, now: u64) -> Option<Value> {
+pub fn launch_detail(
+    st: &State,
+    prices: &Prices,
+    id: u64,
+    now: u64,
+    oracle: &OracleBriefs,
+) -> Option<Value> {
     let l = st.launches.get(&id)?;
-    let mut v = launch_summary(st, l, now);
+    let mut v = launch_summary(st, l, now, oracle);
     v["currentPrice"] = prices.get(&l.feed).and_then(|q| q.back()).map_or(
         Value::Null,
         |(t, p, src)| json!({"t": t, "price": s(p), "source": src}),
@@ -263,6 +278,11 @@ fn num<T: TryFrom<U256>>(v: &Value, k: &str) -> Result<T, String> {
         _ => return Err(format!("{k}: expected a number or string")),
     };
     T::try_from(u).map_err(|_| format!("{k}: out of range"))
+}
+
+/// `num` for callers outside this module.
+pub fn num_field<T: TryFrom<U256>>(v: &Value, k: &str) -> Result<T, String> {
+    num(v, k)
 }
 
 fn address(v: &Value, k: &str) -> Result<Address, String> {
