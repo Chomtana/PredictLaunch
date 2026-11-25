@@ -11,6 +11,10 @@ import {Eip712} from "src/lib/Eip712.sol";
 import {ISingleFeed} from "src/interfaces/ISingleFeed.sol";
 import {ILaunchRail} from "src/interfaces/ILaunchRail.sol";
 
+interface IChainlinkDecimals {
+    function decimals() external view returns (uint8);
+}
+
 /// @title bilauncher Exchange
 /// @notice Native-BNB custody, binary Up/Down markets (one per launch), batched settlement of signed orders, and
 ///         graduation of each launch's memecoin through its rail (a Flap Launcher). See SPEC.md.
@@ -135,6 +139,8 @@ contract Exchange is Ownable, ReentrancyGuard {
     address public factory;
     mapping(address => bool) public operators;
     mapping(address => bool) public feedEnabled;
+    /// Atlas feed => Chainlink AggregatorV3 read by `snapshot` when the Atlas feed reverts or answers <= 0.
+    mapping(address => address) public fallbackFeed;
     uint256 public minTarget;
 
     mapping(address => uint256) public balanceOf;
@@ -192,6 +198,8 @@ contract Exchange is Ownable, ReentrancyGuard {
         string imageURI
     );
     event Snapshot(uint256 launchId, uint256 price, uint64 updatedAt);
+    event SnapshotSource(uint256 launchId, address source);
+    event FallbackFeedSet(address feed, address fallbackFeed);
     event Resolved(uint256 launchId, uint8 outcome, uint256 pairs, uint256 raised);
     event Graduating(uint256 launchId);
     event LaunchFailed(uint256 launchId);
@@ -278,6 +286,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     function setFeed(address feed, bool enabled) external onlyOwner {
         feedEnabled[feed] = enabled;
         emit FeedSet(feed, enabled);
+    }
+
+    /// @notice Chainlink fallback for an Atlas feed's settlement snapshot (address(0) clears it).
+    function setFallbackFeed(address feed, address chainlink) external onlyOwner {
+        fallbackFeed[feed] = chainlink;
+        emit FallbackFeedSet(feed, chainlink);
     }
 
     function setMinTarget(uint256 bnb) external onlyOwner {
@@ -464,13 +478,34 @@ contract Exchange is Ownable, ReentrancyGuard {
         if (l.snapped) revert AlreadySnapped();
         uint256 st = l.settleTime;
         if (block.timestamp < st || block.timestamp > st + GRACE) revert NotInWindow();
-        (, int256 answer,, uint256 updatedAt,) = ISingleFeed(l.feed).latestRoundData();
+        (address source, int256 answer, uint256 updatedAt) = _readSettlementPrice(l.feed);
         if (updatedAt > st + SNAP_TOLERANCE) revert StaleOrFuturePrice();
         if (answer <= 0) revert BadPrice();
         l.snapped = true;
         l.settlePrice = uint256(answer);
         l.settleUpdatedAt = uint64(updatedAt);
         emit Snapshot(id, uint256(answer), uint64(updatedAt));
+        emit SnapshotSource(id, source);
+    }
+
+    /// Atlas first; if it reverts (live Atlas feeds refuse unauthorized contracts) or answers <= 0, the Chainlink
+    /// fallback, scaled to 18 decimals (strike units). With no fallback, the Atlas revert bubbles up.
+    function _readSettlementPrice(address feed) internal view returns (address, int256, uint256) {
+        address fb = fallbackFeed[feed];
+        try ISingleFeed(feed).latestRoundData() returns (uint80, int256 a, uint256, uint256 u, uint80) {
+            if (a > 0 || fb == address(0)) return (feed, a, u);
+        } catch (bytes memory err) {
+            if (fb == address(0)) {
+                assembly ("memory-safe") {
+                    revert(add(err, 32), mload(err))
+                }
+            }
+        }
+        (, int256 answer,, uint256 updatedAt,) = ISingleFeed(fb).latestRoundData();
+        uint8 dec = IChainlinkDecimals(fb).decimals();
+        if (dec < 18) answer *= int256(10 ** (18 - dec));
+        else if (dec > 18) answer /= int256(10 ** (dec - 18));
+        return (fb, answer, updatedAt);
     }
 
     /// @notice Settle the market: after settleTime + MAX_LAG (every batch stamped before settleTime has landed), and

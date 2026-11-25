@@ -14,6 +14,12 @@ Things the SPEC left open, or that the real chain forced, and how the contracts 
    - **Live testnet: the Exchange cannot `snapshot` until Atlas authorizes it** (ask the Atlas team to call
      `setAuthorizedCallers([exchange],[true])` on the feed used). Without it `snapshot` reverts, the market goes
      Void at `settleTime + GRACE` and the launch fails (everyone redeems at 0.50), so no graduation.
+   - **Chainlink fallback (added in integration):** `setFallbackFeed(atlas, chainlink)`; `snapshot` reads Atlas
+     first and, if it reverts or answers <= 0, the Chainlink AggregatorV3 (scaled from `decimals()` to 18). So on live
+     testnet BTCB, BNB, CAKE and USDT launches settle on Chainlink until Atlas authorizes the Exchange; the other feeds
+     still need Atlas. Pinned by `test/Fallback.t.sol` and `test/fork/ChainlinkFork.t.sol` (live state, Exchange not
+     authorized). Note the Chainlink testnet heartbeat is slow: its `updatedAt` can be minutes old at settlement
+     (allowed: the rule only bounds it above by `settleTime + SNAP_TOLERANCE`).
 2. **The testnet Portal (v1.2.0) does not gate unopened factories.** `newLauncher` and the Launcher's
    `launchTaxTokenV2` both succeed for a factory that was never passed to `setLauncherFactoryMultiplier`, even
    with creation paused. The plan's `test_unopenedFactoryRejected` is therefore impossible; it became

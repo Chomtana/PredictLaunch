@@ -82,6 +82,8 @@ function setFactory(address factory) external;                       // the only
 function setOperator(address op, bool on) external;
 function setFeed(address feed, bool enabled) external;
 function setMinTarget(uint256 bnb) external;                         // default 2.15 ether
+function setFallbackFeed(address atlasFeed, address chainlinkFeed) external; // Chainlink AggregatorV3 fallback; 0 clears
+function fallbackFeed(address atlasFeed) external view returns (address);
 
 // funds
 function deposit() external payable;
@@ -158,6 +160,13 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 - Tradable(id, ts): status Active ∧ ts < settleTime.
 - `snapshot(id)`: block.timestamp ∈ [settleTime, settleTime + GRACE], feed `updatedAt ≤ settleTime +
   SNAP_TOLERANCE`, answer > 0, first accepted call wins (stores settlePrice, settleUpdatedAt).
+  Source: the Atlas feed first; if its `latestRoundData()` reverts (live Atlas feeds refuse
+  unauthorized contracts) or answers ≤ 0, and `fallbackFeed(feed) != 0`, the Chainlink fallback's
+  `latestRoundData()` scaled from its `decimals()` to 18 decimals (strike units). The same
+  updatedAt/answer/window rules apply to whichever source is used; with no fallback the Atlas revert
+  bubbles up. Emits `Snapshot` (unchanged) then `SnapshotSource(launchId, source)`. Deploy sets
+  fallbacks from `contracts/script/feeds.json` (`chainlink` field): BTCB/USD, BNB/USD, CAKE/USD,
+  USDT/USD (8-decimal testnet aggregators).
 - `resolve(id)`: block.timestamp ≥ settleTime + MAX_LAG and (snapped ∨ block.timestamp > settleTime
   + GRACE). Outcome: Void if not snapped; else Up iff settlePrice ≥ strike. Non-void: `raised =
   pairs × cut / 10000`, `totalLoserShares = pairs`; then `raised ≥ target` → Graduating, else →
@@ -184,7 +193,8 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 amount)`, `WithdrawPaid(idx, user, requested, paid)`, `KeyAuthorized(owner, key, expiry)`,
 `KeyRevoked(owner, key)`, `OrderCancelled(owner, orderHash)`, `MinNonceBumped(owner, minNonce)`,
 `LaunchCreated(launchId, creator, rail, token, feed, strike, settleTime, cutBps, target, name,
-symbol, imageURI)`, `Snapshot(launchId, price, updatedAt)`, `Resolved(launchId, outcome, pairs,
+symbol, imageURI)`, `Snapshot(launchId, price, updatedAt)`, `SnapshotSource(launchId, source)` (not
+indexed by the sequencer), `FallbackFeedSet(feed, fallbackFeed)`, `Resolved(launchId, outcome, pairs,
 raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`, `LaunchFailed(launchId)`,
 `Redeemed(launchId, user, credit, loserShares)`, `TokensClaimed(launchId, user, amount)`,
 `BatchSubmitted(batchId, ts, fills)`, `Trade(launchId, takerHash, makerHash, kind, makerPrice,

@@ -5,7 +5,8 @@ import {Script, console} from "forge-std/Script.sol";
 import {Exchange} from "src/Exchange.sol";
 import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
 
-/// Deploys Exchange + BilauncherLauncherFactory, enables every feed in script/feeds.json, sets the operator, then hands
+/// Deploys Exchange + BilauncherLauncherFactory, enables every feed in script/feeds.json (with its Chainlink fallback,
+/// if any), sets the operator, then hands
 /// ownership to OWNER, and writes ../.dev/deploy.json {exchange, factory, chainId, owner, operator}.
 ///
 ///   forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <deployer>
@@ -20,6 +21,7 @@ contract Deploy is Script {
 
     struct FeedRow {
         address addr; // json "address"
+        address chainlink; // json "chainlink": Chainlink AggregatorV3 fallback, or address(0)
         string symbol;
     }
 
@@ -37,6 +39,7 @@ contract Deploy is Script {
         ex.setFactory(address(factory));
         for (uint256 i; i < feeds.length; ++i) {
             ex.setFeed(feeds[i].addr, true);
+            if (feeds[i].chainlink != address(0)) ex.setFallbackFeed(feeds[i].addr, feeds[i].chainlink);
         }
         ex.setOperator(operator, true);
         if (owner != deployer) ex.transferOwnership(owner);
