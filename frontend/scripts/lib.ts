@@ -264,6 +264,17 @@ export interface Bot {
   resting: Map<Hex, bigint>
 }
 
+/** "Nov 27, 2026": tomorrow's date as Cournot's daily US-city rain markets name it (US Eastern). */
+export function tomorrowLabel(now = Date.now()): string {
+  return new Date(now + 86400_000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })
+}
+
+/** Cournot probability (0..1) → a question launch's quoting centre in cents, clamped 3..97; 50 when unknown. */
+export function oracleCents(p: number | null | undefined): number {
+  if (p == null || !Number.isFinite(p)) return 50
+  return Math.min(97, Math.max(3, Math.round(p * 100)))
+}
+
 /** Standard normal CDF (Abramowitz–Stegun 7.1.26). */
 export function phi(x: number): number {
   const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2)
