@@ -17,6 +17,8 @@ abstract contract Base is Test {
     address alice = vm.addr(ALICE_PK);
     address bob = vm.addr(BOB_PK);
     address carol = vm.addr(CAROL_PK);
+    uint256 constant DAVE_PK = 0xDA4E;
+    address dave = vm.addr(DAVE_PK);
 
     function setUp() public virtual {
         vm.warp(1_800_000_000);
@@ -30,6 +32,7 @@ abstract contract Base is Test {
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(carol, 100 ether);
+        vm.deal(dave, 100 ether);
     }
 
     address constant RAIL = address(0x8A11);
@@ -68,6 +71,7 @@ abstract contract Base is Test {
         if (u == alice) return ALICE_PK;
         if (u == bob) return BOB_PK;
         if (u == carol) return CAROL_PK;
+        if (u == dave) return DAVE_PK;
         revert("unknown user");
     }
 

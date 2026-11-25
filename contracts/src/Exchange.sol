@@ -4,14 +4,19 @@ pragma solidity ^0.8.26;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {Eip712} from "src/lib/Eip712.sol";
 import {ISingleFeed} from "src/interfaces/ISingleFeed.sol";
+import {ILaunchRail} from "src/interfaces/ILaunchRail.sol";
 
 /// @title bilauncher Exchange
 /// @notice Native-BNB custody, binary Up/Down markets (one per launch), batched settlement of signed orders, and
 ///         graduation of each launch's memecoin through its rail (a Flap Launcher). See SPEC.md.
 contract Exchange is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     // ---------------------------------------------------------------------------------------------------------
     // Constants
     // ---------------------------------------------------------------------------------------------------------
@@ -149,6 +154,11 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     LaunchView[] internal _launches;
     mapping(uint256 id => mapping(address user => Position)) internal _positions;
+    /// @notice Losing shares a user held at resolution (counted on redeem); claimable as memecoin after graduation.
+    mapping(uint256 id => mapping(address user => uint256)) public loserShares;
+    mapping(uint256 id => mapping(address user => uint256)) public claimedShares;
+    /// @notice Set once the rail handed over LOSER_SUPPLY during `graduate`.
+    mapping(uint256 id => bool) public loserTokensIn;
 
     // ---------------------------------------------------------------------------------------------------------
     // Events
@@ -185,6 +195,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     event Resolved(uint256 indexed launchId, uint8 outcome, uint128 pairs, uint256 raised);
     event Graduating(uint256 indexed launchId);
     event LaunchFailed(uint256 indexed launchId);
+    event Graduated(uint256 indexed launchId, address token, uint256 raised);
+    event Redeemed(uint256 indexed launchId, address indexed user, uint256 credit, uint256 loserShares);
+    event TokensClaimed(uint256 indexed launchId, address indexed user, uint256 amount);
     event Trade(
         uint256 indexed launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount
     );
@@ -230,6 +243,13 @@ contract Exchange is Ownable, ReentrancyGuard {
     error Overfill();
     error InsufficientBalance();
     error InsufficientShares();
+    error NotResolved();
+    error NotGraduating();
+    error NotGraduated();
+    error NotRail();
+    error LoserTokensMissing();
+    error LoserTokensAlreadyIn();
+    error BadToken();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
@@ -481,6 +501,85 @@ contract Exchange is Ownable, ReentrancyGuard {
         l.outcome = outcome;
         if (l.status == FAILED) emit LaunchFailed(id);
         emit Resolved(id, outcome, pairs, l.raised);
+    }
+
+    /// @notice Settle positions after resolution. Void: every share 0.50. Graduating/Graduated: winners get
+    ///         `1 - cut` per share, losers' shares are counted for the memecoin. Failed (non-void): winners get 1.00.
+    function redeem(uint256 id, address[] calldata users) external {
+        LaunchView storage l = _launch(id);
+        if (!l.resolved) revert NotResolved();
+        uint8 outcome = l.outcome;
+        bool failed = l.status == FAILED;
+        uint256 cut = l.cutBps;
+        for (uint256 i; i < users.length; ++i) {
+            address u = users[i];
+            Position storage p = _positions[id][u];
+            uint256 up = p.up;
+            uint256 down = p.down;
+            if (up == 0 && down == 0) continue;
+            delete _positions[id][u];
+            uint256 credit;
+            uint256 lose;
+            if (outcome == VOID) {
+                credit = (up + down) / 2;
+            } else {
+                (uint256 win, uint256 los) = outcome == UP ? (up, down) : (down, up);
+                if (failed) {
+                    credit = win;
+                } else {
+                    credit = win * (10_000 - cut) / 10_000;
+                    lose = los;
+                    if (lose > 0) loserShares[id][u] += lose;
+                }
+            }
+            if (credit > 0) balanceOf[u] += credit;
+            emit Redeemed(id, u, credit, lose);
+        }
+    }
+
+    /// @notice Graduating -> Graduated: hand `raised` to the rail, which launches the memecoin and must give the
+    ///         Exchange exactly LOSER_SUPPLY (via `receiveLoserTokens`) before returning. Permissionless.
+    function graduate(uint256 id) external nonReentrant {
+        LaunchView storage l = _launch(id);
+        if (l.status != GRADUATING) revert NotGraduating();
+        l.status = GRADUATED;
+        uint256 raised = l.raised;
+        (address token,) = ILaunchRail(l.rail).launch{value: raised}(id);
+        if (!loserTokensIn[id]) revert LoserTokensMissing();
+        if (token != l.token) revert BadToken();
+        emit Graduated(id, token, raised);
+    }
+
+    /// @notice Rail only, during `graduate`: pulls the losers' LOSER_SUPPLY of the launch's memecoin.
+    function receiveLoserTokens(uint256 id, address token, uint256 amount) external {
+        LaunchView storage l = _launch(id);
+        if (msg.sender != l.rail) revert NotRail();
+        if (l.status != GRADUATED) revert NotGraduated();
+        if (loserTokensIn[id]) revert LoserTokensAlreadyIn();
+        if (token != l.token || amount != LOSER_SUPPLY) revert BadToken();
+        loserTokensIn[id] = true;
+        uint256 before = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        if (IERC20(token).balanceOf(address(this)) - before != amount) revert BadToken();
+    }
+
+    /// @notice Pays `(loserShares - claimedShares) * LOSER_SUPPLY / totalLoserShares`; callable again as more of
+    ///         the caller's losing shares get redeemed.
+    function claimTokens(uint256 id) external nonReentrant {
+        LaunchView storage l = _launch(id);
+        if (l.status != GRADUATED) revert NotGraduated();
+        uint256 owed = claimableTokens(id, msg.sender);
+        if (owed == 0) revert NothingToClaim();
+        claimedShares[id][msg.sender] = loserShares[id][msg.sender];
+        IERC20(l.token).safeTransfer(msg.sender, owed);
+        emit TokensClaimed(id, msg.sender, owed);
+    }
+
+    function claimableTokens(uint256 id, address u) public view returns (uint256) {
+        LaunchView storage l = _launch(id);
+        uint256 total = l.totalLoserShares;
+        if (l.status != GRADUATED || total == 0) return 0;
+        return (loserShares[id][u] - claimedShares[id][u]) * LOSER_SUPPLY / total;
     }
 
     function launchCount() external view returns (uint256) {
