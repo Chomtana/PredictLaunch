@@ -1,0 +1,27 @@
+[package]
+name = "bilauncher-sequencer"
+description = "bilauncher sequencer: chain I/O, keeper, HTTP/WS API, price stream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bilauncher-core = { path = "../core" }
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+alloy = { version = "2.6.1", default-features = false, features = ["contract", "provider-http", "signer-local", "network", "rpc-types", "reqwest", "dyn-abi"] }
+axum = { version = "0.8.9", features = ["ws"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
+tower-http = { version = "0.7.1", features = ["cors"] }
+clap = { version = "4.6.9", features = ["derive", "env"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
+http-body-util = "0.1.5"
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.34"
