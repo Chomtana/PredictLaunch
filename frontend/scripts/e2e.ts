@@ -50,11 +50,12 @@ async function main() {
   const now = await S.chainNow()
   const strike = await S.feedPrice(FEEDS.BTCB)
   const settleTime = now + SETTLE_IN
-  const { id, token } = await S.createLaunch(creator, {
+  const { id, token, rail } = await S.createLaunch(creator, {
     name: 'E2E Coin', symbol: 'E2E', imageURI: '', feed: FEEDS.BTCB, strike, settleTime, cutBps: CUT, target: parseEther('2.15'),
   })
   log(`launch #${id} token ${token}, strike ${Number(strike) / 1e18}, settles at ${settleTime} (in ${SETTLE_IN} s)`)
   check(token.toLowerCase().endsWith('7777'), `token ${token} ends in 7777`)
+  log(`warmed the fork for graduation in ${await S.warmGraduation(rail, id, parseEther('2.5'))} ms`)
 
   const up: Bot = await S.makeBot(privateKeyToAccount(ANVIL_KEYS[1]), 50n * E18)
   const down: Bot = await S.makeBot(privateKeyToAccount(ANVIL_KEYS[2]), 50n * E18)

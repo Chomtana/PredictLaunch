@@ -1,7 +1,7 @@
 // Shared helpers for the local-fork scripts (seed.ts, e2e.ts). LOCAL ONLY: public anvil dev keys.
 
 import { readFileSync } from 'node:fs'
-import { createPublicClient, createWalletClient, decodeEventLog, http, parseAbi, parseEther, type Address, type Hex, type LocalAccount } from 'viem'
+import { createPublicClient, createWalletClient, decodeEventLog, encodeFunctionData, http, parseAbi, parseEther, type Address, type Hex, type LocalAccount } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { chainFor, encodeLaunchConfig, exchangeAbi, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
@@ -38,6 +38,8 @@ export const FEEDS = {
 export const feedAbi = parseAbi([
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
 ])
+
+export const railAbi = parseAbi(['function launch(uint256 launchId) payable returns (address token, address pool)'])
 
 export const exchangeExtraAbi = parseAbi([
   'event LaunchCreated(uint256 launchId, address creator, address rail, address token, address feed, uint256 strike, uint64 settleTime, uint16 cutBps, uint256 target, string name, string symbol, string imageURI)',
@@ -100,7 +102,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
   }
 
   /** Portal.newLauncher(factory, LaunchConfig) with a mined ...7777 salt. Returns the launch id. */
-  async function createLaunch(acct: LocalAccount, c: Omit<LaunchConfig, 'salt'>): Promise<{ id: bigint; token: Address }> {
+  async function createLaunch(acct: LocalAccount, c: Omit<LaunchConfig, 'salt'>): Promise<{ id: bigint; token: Address; rail: Address }> {
     const salt = mineSaltSync(randomSeed())
     const token = predictToken(salt)
     const fee = await pc.readContract({ address: PORTAL, abi: portalAbi, functionName: 'SALT_LOCK_FEE' })
@@ -111,13 +113,36 @@ export function setup(rpc: string, api: string, deployPath: string) {
         const ev = decodeEventLog({ abi: exchangeExtraAbi, data: log.data, topics: log.topics })
         if (ev.eventName === 'LaunchCreated') {
           if (ev.args.token.toLowerCase() !== token.toLowerCase()) throw new Error(`token ${ev.args.token} != predicted ${token}`)
-          return { id: ev.args.launchId, token: ev.args.token }
+          return { id: ev.args.launchId, token: ev.args.token, rail: ev.args.rail }
         }
       } catch (e) {
         if ((e as Error).message.startsWith('token')) throw e
       }
     }
     throw new Error('no LaunchCreated event in the newLauncher receipt')
+  }
+
+  /**
+   * Fork only: pull the whole graduation path (Flap Portal, token implementation, PancakeSwap) into
+   * anvil's fork cache before trading starts. The first graduation on a cold fork fetches so much
+   * remote state that anvil stalls for ~30 s, long enough for an in-flight batch to exceed MAX_LAG
+   * (BadBatchTs -> soft reversal). This eth_calls rail.launch(id) as the Exchange (it reverts at the
+   * end, in receiveLoserTokens, after touching everything) and changes no state.
+   */
+  async function warmGraduation(rail: Address, id: bigint, value: bigint) {
+    const t = Date.now()
+    try {
+      await pc.call({
+        account: deploy.exchange,
+        to: rail,
+        data: encodeFunctionData({ abi: railAbi, functionName: 'launch', args: [id] }),
+        value,
+        stateOverride: [{ address: deploy.exchange, balance: value * 2n }],
+      })
+    } catch {
+      /* expected: receiveLoserTokens rejects a launch that is not Graduated */
+    }
+    return Date.now() - t
   }
 
   /** Fund (dev faucet, else anvil_setBalance), deposit into the Exchange, authorize a trading key. */
@@ -199,7 +224,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, get, post, send, chainNow, feedPrice, createLaunch, makeBot, topUp, place, cancelAll }
+  return { deploy, chain, pc, D, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, makeBot, topUp, place, cancelAll }
 }
 
 export interface Bot {

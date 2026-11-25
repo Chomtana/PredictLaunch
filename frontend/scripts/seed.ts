@@ -27,6 +27,7 @@ const shares = (x: number) => (BigInt(Math.round(x * 100)) * UNIT) // x shares, 
 
 interface Mkt {
   id: bigint
+  rail: `0x${string}`
   strike: bigint
   settleTime: bigint
   feed: `0x${string}`
@@ -44,9 +45,9 @@ async function createPair(): Promise<Mkt[]> {
   ]
   const out: Mkt[] = []
   for (const d of defs) {
-    const { id, token } = await S.createLaunch(CREATOR, { ...d, imageURI: '' })
+    const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: '' })
     console.log(`seed: launch #${id} ${d.symbol} token ${token} strike ${Number(d.strike) / 1e18} settles in ${Number(d.settleTime - now)} s`)
-    out.push({ id, strike: d.strike, settleTime: d.settleTime, feed: d.feed, target: d.target, cutBps: d.cutBps })
+    out.push({ id, rail, strike: d.strike, settleTime: d.settleTime, feed: d.feed, target: d.target, cutBps: d.cutBps })
   }
   return out
 }
@@ -79,6 +80,7 @@ async function fair(m: Mkt): Promise<number> {
 async function main() {
   console.log('seed: creating launches')
   let mkts = await createPair()
+  console.log(`seed: warmed the fork for graduation in ${await S.warmGraduation(mkts[0].rail, mkts[0].id, mkts[0].target)} ms`)
   console.log('seed: funding bots #5 #6 #7 and authorizing trading keys')
   const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(privateKeyToAccount(ANVIL_KEYS[i]), 300n * E18)))
   const takers = [t1, t2]
