@@ -10,7 +10,8 @@ problem statement calls for a prediction market, so we rebuild on the same skele
 **The pitch:** a memecoin launchpad where the launch's liquidity is raised by a prediction game.
 A creator launches a memecoin and attaches a binary "Up or Down" price game (for example "BTC Up or
 Down, 5m"). People bet on rounds of that game through a Polymarket-style order book. Winners are
-paid **0.90 per winning share instead of 1.00**. The other 0.10 fills the memecoin's launch pool.
+paid **1.00 minus the launch's cut per winning share** (cut set by the creator, default 10%, so
+0.90). The cut fills the memecoin's launch pool.
 Losers earn the memecoin as a rebate, in proportion to their losing shares. When the pool reaches
 the creator's target, the memecoin "graduates": it launches into a trading pool funded by the
 raised money, the game stops, and losers claim their tokens.
@@ -37,7 +38,7 @@ coin whose liquidity was paid for by the winners. Traders also get fast, CEX-lik
 - ZK proofs, encrypted order data, recovery keys (all of biliquid's ZK machinery is dropped).
 - The real Flap integration. Flap's Pool Launch needs a factory audited and enabled by Flap
   (docs.flap.sh, "Pool Launch → Basic mechanism"), so we mock it.
-- Mainnet, fees beyond the 10% haircut, multiple collateral tokens, ERC-1155 share tokens.
+- Mainnet, fees beyond the per-launch cut, multiple collateral tokens, ERC-1155 share tokens.
 - Price-range-on-a-date markets (the first idea). Only recurring Up/Down rounds.
 
 ## Anti-goals (a failure even if it works)
@@ -116,7 +117,8 @@ The user picked B.
 ### Launch lifecycle
 
 1. **Create** (anyone, one transaction): memecoin name, symbol, image URI; game feed + interval,
-   where the interval must be allowed for that feed; **graduation target** in USDT (creator's
+   where the interval must be allowed for that feed; **cut** (user's decision): one of 10% (default),
+   15%, 20%, 25% or 30%, stored per launch and fixed for its lifetime; **graduation target** in USDT (creator's
    choice, at least `minTarget`); **deadline** (creator's choice). `minTarget` is an
    admin-configurable value, **100 USDT for the mock/demo** (user's decision). It follows Flap's
    creation floor, `$750 × multiplier × totalSupply / poolToken`, which is $1,500 at 50% in the pool
@@ -124,7 +126,7 @@ The user picked B.
    Flap agrees during its factory audit. A target below Flap's $3,000 "Graduated" floor (at 50%)
    still launches, but would show as "New" on Flap. The game's round 0 starts at the next interval boundary (rounds align
    to wall clock: 5m rounds at :00, :05, ...).
-2. **Active**: rounds run back to back. Each round's 10% haircut adds to `raised`.
+2. **Active**: rounds run back to back. Each round's cut adds to `raised`.
 3. **Graduate**: when the resolve that pushes `raised ≥ target` lands, the launch graduates in the
    same transaction. That round is the last one, and every round after it is untradable. The whole
    `raised` amount (overshoot included) becomes pool liquidity through the mock Portal. Total
@@ -137,8 +139,8 @@ The user picked B.
 4. **Fail** (user's decision): the creator also sets a **deadline** at creation. If the deadline
    passes before graduation, the launch fails: the game stops (no round starting after the deadline
    is tradable, and the round in progress at the deadline still resolves normally), and **winners get
-   the full 1.00**. Each winner reclaims the 0.10 per winning share that was held back. To support
-   this, redeem records `haircutPaid[launch][user] += 0.10 × winningShares`, and the haircut USDT
+   the full 1.00**. Each winner reclaims the cut per winning share that was held back. To support
+   this, redeem records `haircutPaid[launch][user] += cut × winningShares`, and the haircut USDT
    stays in `Exchange` (not the Launcher) until graduation. On failure, `refundHaircut(launch)`
    credits `haircutPaid` back to the user's balance. Loser shares of a failed launch are worth
    nothing.
@@ -161,7 +163,7 @@ The user picked B.
   than 5 s after t before anyone snapshotted), the round is void. Every share, Up or Down, redeems
   at 0.50, with no haircut, no pool contribution and no loser shares.
 - **Resolve** after `endTime + MAX_LAG` (so every batch stamped before end has landed). Resolve
-  adds `0.10 × outstandingPairs` to `raised`. outstandingPairs = pairs minted − pairs merged, so
+  adds `cut × outstandingPairs` to `raised`. outstandingPairs = pairs minted − pairs merged, so
   each outstanding winning share sits across from exactly one losing share. If `raised >= target`,
   the launch graduates in the same call.
 - **Tradable** only while live **and after the previous round has resolved**:
@@ -172,7 +174,7 @@ The user picked B.
   during the pause.)* The keeper runs resolve(k) and snapshot together right after
   `end + MAX_LAG`. Trading on upcoming rounds is not in scope.
 - **Redeem** (permissionless, for any user list; the keeper batches it): a winning share credits
-  0.90 USDT to the holder's balance; a losing share adds to the holder's `loserShares` for the
+  `1 − cut` USDT to the holder's balance; a losing share adds to the holder's `loserShares` for the
   launch.
 
 ### Order book (Polymarket model)
@@ -233,14 +235,14 @@ The user picked B.
 
 - **Home**: launch cards with coin, game ("BTC · 5m"), progress bar `raised / target`, live
   round's Up price, and a "Create launch" button.
-- **Create launch**: form (name, symbol, image URL, feed, interval filtered by feed, target ≥
+- **Create launch**: form (name, symbol, image URL, feed, interval filtered by feed, cut (10–30% picker), target ≥
   `minTarget` read from the contract, deadline).
 - **Launch page**: the Polymarket layout in the reference screenshot
   ([assets/polymarket-btc-5m.png](assets/polymarket-btc-5m.png); use it for layout only, not
   Polymarket's branding). Header with coin + game; price
   to beat, current price with delta, countdown; live chart with the target line; round strip (past
   outcomes as ▲/▼ dots, live, upcoming); right panel with Buy/Sell, Up/Down prices, amount
-  presets, a "win $X" preview **that shows the 0.90 payout**, and the order book. Below that:
+  presets, a "win $X" preview **that shows the `1 − cut` payout** (and the cut as a badge, e.g. "10% to launch"), and the order book. Below that:
   launch progress, "your loser shares → est. tokens", and positions.
 - **Graduated launch page**: game stopped; token address, pool price, "Claim N tokens".
 - **Account**: deposit/withdraw, faucet (testnet), trading-key session.
