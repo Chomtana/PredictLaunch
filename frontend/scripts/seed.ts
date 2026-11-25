@@ -3,7 +3,7 @@
 //   node --experimental-strip-types scripts/seed.ts --api http://127.0.0.1:8787 \
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
-// Creates 2 launches through Portal.newLauncher + our factory (anvil #4 is the creator):
+// Creates 2 launches through Portal.newLauncher + our factory (anvil #3 is the creator):
 //   BTCB: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB
 //   BNB:  strike = current price + 1%, settles in 30 min, cut 30%, target 3 BNB
 // Funds 3 bots (anvil #5 maker, #6 and #7 takers), deposits, authorizes one trading key each, and
@@ -21,7 +21,7 @@ const API = arg('api', 'http://127.0.0.1:8787')!
 const LIVE = process.argv.includes('--live')
 const S = setup(RPC, API, arg('deploy', '../.dev/deploy.json')!)
 
-const CREATOR = privateKeyToAccount(ANVIL_KEYS[4])
+const CREATOR = privateKeyToAccount(ANVIL_KEYS[3])
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
 const shares = (x: number) => (BigInt(Math.round(x * 100)) * UNIT) // x shares, 0.01 granularity
 
