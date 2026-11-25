@@ -33,6 +33,12 @@ export interface Config {
   quoteSymbol?: string
   /** Optional: true when POST /api/faucet is enabled (--dev-faucet). */
   faucet?: boolean
+  /** Question launches (SPEC "Question launches"): "mock" = simulated oracle, no paid Cournot calls. */
+  cournotMode?: 'live' | 'mock'
+  /** Seconds a resolver proposal can be challenged before resolve() accepts it. */
+  challengeWindow?: Num
+  /** Seconds after settleTime with no proposal before resolve() voids the launch. */
+  questionDeadline?: Num
 }
 
 export const LaunchStatus = { Active: 0, Graduating: 1, Graduated: 2, Failed: 3 } as const
@@ -64,6 +70,86 @@ export interface LaunchSummary {
   upPrice: number | null
   projectedRaised: string
   progress: Num
+  /** "question" for a Cournot question launch (feed = 0). Older sequencers omit it: see `kindOf`. */
+  kind?: 'price' | 'question'
+  question?: string | null
+  marketId?: Num | null
+  /** Opening Cournot probability, 0..1. */
+  oracleProbability?: number | null
+  oracleSource?: OracleSource | null
+}
+
+// ------------------------------------------------------------------ Cournot (question launches)
+
+export type OracleSource = 'cournot-live' | 'mock'
+
+/** One market from POST /api/cournot/resolve. `yesPrice` is the live YES price (0..1), not a result. */
+export interface CournotMarket {
+  matchingConfidence: number
+  id: Num
+  title: string
+  description: string
+  /** ISO string or unix seconds (see `toUnixSec`). */
+  startTime: Num | null
+  endTime: Num | null
+  yesPrice: number | null
+}
+
+/** SPEC "Oracle record": the normalized Cournot answer the UI shows as-is. */
+export interface OracleRecord {
+  launchId: Num | null
+  /** The exact text sent to Cournot. */
+  claim: string
+  marketId: Num
+  market: Record<string, unknown> | null
+  probability: number | null
+  result: Record<string, unknown> | null
+  basis: Record<string, unknown> | unknown[] | null
+  source: OracleSource
+  fetchedAt: Num
+  error: string | null
+  raw: unknown
+}
+
+export interface OracleProposal {
+  proposed: boolean
+  outcome: Num
+  proposedAt: Num
+  evidenceHash: Hex
+  final: boolean
+  challengeEndsAt: Num
+}
+
+export interface LaunchOracle {
+  opening: OracleRecord | null
+  prices: { t: number; price: number }[]
+  settlement: OracleRecord | null
+  proposal: OracleProposal | null
+}
+
+/** Unix seconds from an ISO string, unix seconds or unix ms (number or numeric string). NaN if unparseable. */
+export function toUnixSec(v: Num | null | undefined): number {
+  if (v == null || v === '') return NaN
+  const x = typeof v === 'number' ? v : /^\d+(\.\d+)?$/.test(v) ? Number(v) : Date.parse(v) / 1000
+  return x > 1e12 ? Math.floor(x / 1000) : x
+}
+
+const COURNOT_ERRORS: Record<string, string> = {
+  cournot_unavailable: 'The Cournot oracle is unreachable right now. Try again in a moment.',
+  payment_required: 'Cournot asked for payment (402). The sequencer needs a COURNOT_API_KEY, or run it with COURNOT_MODE=mock.',
+  bad_question: 'Cournot rejected the question: it must be 1–280 bytes and a clear yes/no claim.',
+  rate_limited: 'Too many requests: wait a couple of seconds and try again.',
+}
+
+/** A friendly line for a failed Cournot call (the API's error codes, or the HTTP status when the body has none). */
+export function cournotError(e: unknown): string {
+  const code = (e as { code?: string })?.code ?? ''
+  if (COURNOT_ERRORS[code]) return COURNOT_ERRORS[code]
+  if (code === 'http_402') return COURNOT_ERRORS.payment_required
+  if (code === 'http_429') return COURNOT_ERRORS.rate_limited
+  if (/^http_5\d\d$/.test(code)) return COURNOT_ERRORS.cournot_unavailable
+  if (e instanceof TypeError) return 'The sequencer is unreachable.'
+  return (e as Error)?.message ?? String(e)
 }
 
 export interface Trade {
@@ -170,6 +256,11 @@ export const api = {
   user: (addr: Address) => req<UserView>(`/api/user/${addr}`),
   msgs: (group: Msg[]) => post<{ results: MsgResult[] }>('/api/msgs', group),
   faucet: (address: Address) => post<unknown>('/api/faucet', { address }),
+  /** Free; always a live Cournot call. */
+  cournotResolve: (message: string) => post<{ markets: CournotMarket[] }>('/api/cournot/resolve', { message }),
+  /** May cost money in live mode (cached by (message, marketId)): only call on an explicit user action. */
+  cournotProbability: (message: string, marketId: Num) => post<OracleRecord>('/api/cournot/probability', { message, marketId: Number(marketId) }),
+  oracle: (id: Num) => req<LaunchOracle>(`/api/launch/${id}/oracle`),
 }
 
 // ------------------------------------------------------------------ helpers over API shapes
