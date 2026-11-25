@@ -5,6 +5,7 @@ import { fmtBnb, parseBnb, usd } from '../lib/units.ts'
 import { isNative } from '../lib/chain.ts'
 import { DEV_ACCOUNTS } from '../lib/wallet.ts'
 import { useApp } from '../state.tsx'
+import { labelsFor } from '../lib/labels.ts'
 
 /** Account drawer: wallet, exchange balance, deposit/withdraw, faucet, trading key. */
 export function AccountDrawer() {
@@ -165,12 +166,13 @@ function Connected() {
           <div className="mini-list">
             {user.positions.map((p) => {
               const l = nameOf(p.launchId)
+              const [U, D] = labelsFor(l).names
               return (
                 <a key={String(p.launchId)} href={`#/launch/${p.launchId}`} className="mini-row">
                   <span>{l ? `$${l.symbol}` : `#${p.launchId}`}</span>
                   <span className="mono">
-                    {BigInt(p.up) > 0n && <span className="up">{fmtBnb(p.up, 2)} Up </span>}
-                    {BigInt(p.down) > 0n && <span className="down">{fmtBnb(p.down, 2)} Down</span>}
+                    {BigInt(p.up) > 0n && <span className="up">{fmtBnb(p.up, 2)} {U} </span>}
+                    {BigInt(p.down) > 0n && <span className="down">{fmtBnb(p.down, 2)} {D}</span>}
                   </span>
                 </a>
               )

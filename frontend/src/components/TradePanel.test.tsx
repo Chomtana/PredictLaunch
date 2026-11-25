@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { Book } from '../lib/api.ts'
 import { TradePanel, type TradePanelProps } from './TradePanel.tsx'
+import { QUESTION_LABELS } from '../lib/labels.ts'
 
 const E18 = 10n ** 18n
 const book: Book = {
@@ -79,6 +80,17 @@ describe('TradePanel', () => {
     setup({ tradable: false, settleTime: Math.floor(Date.now() / 1000) - 10 })
     expect(screen.getByText(/Settling…/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Buy Up/ })).toBeNull()
+  })
+
+  it('question launches trade YES / NO on the same outcomes', () => {
+    const onOrder = setup({ labels: QUESTION_LABELS, title: 'Will it rain in Boston on Nov 27, 2026?' })
+    expect(screen.getByRole('button', { name: /YES 60¢/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /NO 45¢/ })).toBeTruthy()
+    expect(screen.queryByText(/\bUp\b/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /NO 45¢/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^1 BNB/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Buy NO/ }))
+    expect(((onOrder.mock.calls[0] as unknown[])[0] as Record<string, unknown>).outcome).toBe(1)
   })
 
   it('without a session key asks to enable trading', () => {

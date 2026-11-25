@@ -3,6 +3,7 @@ import { n, type OrderView, type Trade } from '../lib/api.ts'
 import { clock } from '../lib/format.ts'
 import { cost, fmtBnb, fmtShares, payout } from '../lib/units.ts'
 import { useQuote } from '../state.tsx'
+import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
 /** The user's position in this launch, their open orders, and recent trades. */
 export function Positions({
@@ -12,6 +13,7 @@ export function Positions({
   orders,
   trades,
   onCancel,
+  labels = PRICE_LABELS,
 }: {
   position: { up: bigint; down: bigint } | null
   cutBps: number
@@ -19,12 +21,14 @@ export function Positions({
   orders: OrderView[]
   trades: Trade[]
   onCancel: (h: Hex) => void
+  labels?: OutcomeLabels
 }) {
+  const [U, D] = labels.names
   const { symbol: q } = useQuote()
   const rows = position
     ? ([
-        ['Up', position.up, mid],
-        ['Down', position.down, mid != null ? 100 - mid : null],
+        [0, position.up, mid],
+        [1, position.down, mid != null ? 100 - mid : null],
       ] as const).filter(([, a]) => a > 0n)
     : []
   return (
@@ -45,8 +49,8 @@ export function Positions({
           <tbody>
             {rows.map(([o, a, p]) => (
               <tr key={o}>
-                <td className={o === 'Up' ? 'up' : 'down'}>
-                  <b>{o}</b>
+                <td className={o === 0 ? 'up' : 'down'}>
+                  <b>{labels.names[o]}</b>
                 </td>
                 <td className="r mono">{fmtShares(a)}</td>
                 <td className="r mono">{p != null ? `${fmtBnb(cost(a, p), 3)} ${q}` : '—'}</td>
@@ -72,7 +76,7 @@ export function Positions({
               {orders.map((o) => (
                 <tr key={o.orderHash}>
                   <td className={n(o.outcome) === 0 ? 'up' : 'down'}>
-                    {n(o.side) === 0 ? 'Buy' : 'Sell'} {n(o.outcome) === 0 ? 'Up' : 'Down'}
+                    {n(o.side) === 0 ? 'Buy' : 'Sell'} {n(o.outcome) === 0 ? U : D}
                   </td>
                   <td className="r mono">{n(o.price)}¢</td>
                   <td className="r mono">{fmtShares(o.remaining ?? o.amount)}</td>
@@ -96,7 +100,7 @@ export function Positions({
             <tbody>
               {trades.slice(0, 30).map((t, i) => (
                 <tr key={i}>
-                  <td className={t.side === 'buy' ? 'up' : 'down'}>{t.side === 'buy' ? 'Up' : 'Down'}</td>
+                  <td className={t.side === 'buy' ? 'up' : 'down'}>{t.side === 'buy' ? U : D}</td>
                   <td className="r mono">{t.side === 'buy' ? t.price : 100 - t.price}¢</td>
                   <td className="r mono">{fmtShares(t.amount)}</td>
                   <td className="r muted small">{clock(t.ts > 1e12 ? t.ts : t.ts * 1000)}</td>

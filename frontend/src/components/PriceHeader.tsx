@@ -3,6 +3,8 @@ import { fmtPrice, fmtUsd, num18 } from '../lib/units.ts'
 import type { Phase } from './LaunchCard.tsx'
 import { AssetBadge, CoinAvatar, Spinner } from './ui.tsx'
 import { StatusChip } from './LaunchCard.tsx'
+import type { OracleSource } from '../lib/api.ts'
+import { SourceBadge, pct } from './Cournot.tsx'
 
 /** "Will BTC be ≥ $100,000 at Nov 26, 12:00?" */
 export const question = (feedSym: string, strike: bigint, settleTime: number) => `Will ${asset(feedSym)} be ≥ ${fmtPrice(strike)} at ${settleLabel(settleTime)}?`
@@ -58,6 +60,66 @@ export function PriceHeader(p: {
             )}
           </div>
           <div className="value num">{shown != null ? fmtPrice(shown) : '—'}</div>
+        </div>
+        {p.phase === 'live' ? (
+          <div className={`countdown ${left > 3600 ? 'calm' : ''}`} aria-label="Time to settlement">
+            {cd.d > 0 && <CdPart n={cd.d} u="DAYS" />}
+            {(cd.d > 0 || cd.h > 0) && <CdPart n={cd.h} u="HRS" />}
+            <CdPart n={cd.m} u="MIN" />
+            {cd.d === 0 && <CdPart n={cd.s} u="SECS" />}
+          </div>
+        ) : p.phase === 'settling' ? (
+          <div className="settling-note">
+            <Spinner /> Settling…
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** Header for a question launch: the question as the title, YES on the book vs the Cournot opening, countdown. */
+export function QuestionHeader(p: {
+  name: string
+  symbol: string
+  image: string
+  question: string
+  settleTime: number
+  phase: Phase
+  now: number
+  /** YES mid on the book, cents */
+  yesMid: number | null
+  probability: number | null
+  source: OracleSource | null
+}) {
+  const left = p.settleTime - p.now
+  const cd = countdown(left)
+  return (
+    <div className="price-header">
+      <div className="ph-top">
+        <CoinAvatar name={p.name} image={p.image} size={64} rounded={14} />
+        <div className="ph-title">
+          <h1>{p.question}</h1>
+          <div className="ph-sub">
+            <span>
+              <b style={{ color: 'var(--text)' }}>{p.name}</b> <span className="mono">${p.symbol}</span>
+            </span>
+            <span>·</span>
+            <span>Cournot question · settles {settleLabel(p.settleTime)}</span>
+            <SourceBadge source={p.source} />
+            <StatusChip phase={p.phase} />
+          </div>
+        </div>
+      </div>
+      <div className="ph-stats">
+        <div className="ph-stat">
+          <div className="label">YES on the book</div>
+          <div className="value num up">{p.yesMid != null ? `${p.yesMid}¢` : '—'}</div>
+        </div>
+        <div className="ph-sep" />
+        <div className="ph-stat">
+          <div className="label">Cournot opening</div>
+          <div className="value num">{pct(p.probability)}</div>
         </div>
         {p.phase === 'live' ? (
           <div className={`countdown ${left > 3600 ? 'calm' : ''}`} aria-label="Time to settlement">

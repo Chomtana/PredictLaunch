@@ -4,6 +4,7 @@ import { bestPrice, levelsFor, walkBuy, walkSell } from '../lib/market.ts'
 import { cost, floorShares, fmtBnb, fmtShares, parseBnb, payout, type Outcome } from '../lib/units.ts'
 import { useQuote, type OrderParams } from '../state.tsx'
 import { Spinner } from './ui.tsx'
+import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
 export interface TradePanelProps {
   launchId: number
@@ -21,6 +22,8 @@ export interface TradePanelProps {
   onEnable: () => void
   onConnect: () => void
   onOrder: (p: OrderParams) => Promise<MsgResult | null>
+  /** Up/Down (price launch) or YES/NO (question launch); default Up/Down. */
+  labels?: OutcomeLabels
 }
 
 const PRESETS: [string, bigint][] = [
@@ -28,9 +31,8 @@ const PRESETS: [string, bigint][] = [
   ['0.25', 25n * 10n ** 16n],
   ['1', 10n ** 18n],
 ]
-const NAME = ['Up', 'Down'] as const
-
 export function TradePanel(p: TradePanelProps) {
+  const NAME = (p.labels ?? PRICE_LABELS).names
   const { symbol: q } = useQuote()
   const [side, setSide] = useState<0 | 1>(0)
   const [outcome, setOutcome] = useState<Outcome>(0)
@@ -156,10 +158,10 @@ export function TradePanel(p: TradePanelProps) {
         <>
           <div className="outcome-btns">
             <button className={`outcome-btn up ${outcome === 0 ? 'on' : ''}`} onClick={() => setOutcome(0)}>
-              Up {priceUp != null ? `${priceUp}¢` : '--'}
+              {NAME[0]} {priceUp != null ? `${priceUp}¢` : '--'}
             </button>
             <button className={`outcome-btn down ${outcome === 1 ? 'on' : ''}`} onClick={() => setOutcome(1)}>
-              Down {priceDown != null ? `${priceDown}¢` : '--'}
+              {NAME[1]} {priceDown != null ? `${priceDown}¢` : '--'}
             </button>
           </div>
 
