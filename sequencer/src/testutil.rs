@@ -267,3 +267,128 @@ pub fn now_secs() -> u64 {
         .unwrap()
         .as_secs()
 }
+
+/// A fresh, empty directory under the system temp dir (for oracle stores in tests).
+pub fn temp_dir(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let d = std::env::temp_dir().join(format!(
+        "bilauncher-{tag}-{}-{}-{}",
+        std::process::id(),
+        now_secs(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+// ------------------------------------------------------------------------------- mock Cournot
+
+/// Requests seen by `MockCournot`, and what it answers.
+#[derive(Default, Clone)]
+pub struct MockCournotState {
+    /// `data.markets` entries returned by `resolve`.
+    pub markets: Vec<serde_json::Value>,
+    /// (HTTP status, body) returned by `probability` (default 200 with a 0.5 estimate).
+    pub probability: Option<(u16, serde_json::Value)>,
+    pub resolve_calls: usize,
+    pub probability_calls: usize,
+    pub last_resolve_body: Option<serde_json::Value>,
+    pub last_probability_body: Option<serde_json::Value>,
+    /// `COURNOT-API-KEY` of the last probability request.
+    pub last_key: Option<String>,
+}
+
+/// A local Cournot stand-in on `127.0.0.1:<random>` (tests never reach the real service).
+pub struct MockCournot {
+    pub base: String,
+    pub inner: std::sync::Arc<Mutex<MockCournotState>>,
+}
+
+/// One `resolve` result as Cournot sends it.
+pub fn market_json(id: u64, title: &str, yes_price: f64, confidence: f64) -> serde_json::Value {
+    serde_json::json!({
+        "market_info": {
+            "id": id,
+            "title": title,
+            "description": format!("{title} (description)"),
+            "start_time": "",
+            "end_time": "2026-12-09T23:59:00Z",
+            "market_outcome": "YES",
+            "market_outcome_price": yes_price,
+        },
+        "matching_confidence": confidence,
+    })
+}
+
+type MockState = axum::extract::State<std::sync::Arc<Mutex<MockCournotState>>>;
+
+async fn mock_resolve(
+    axum::extract::State(st): MockState,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    let mut s = st.lock().unwrap();
+    s.resolve_calls += 1;
+    s.last_resolve_body = Some(body);
+    axum::Json(serde_json::json!({
+        "code": 0, "msg": "Success", "data": {"markets": s.markets, "charged": false}
+    }))
+}
+
+async fn mock_probability(
+    axum::extract::State(st): MockState,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    let mut s = st.lock().unwrap();
+    s.probability_calls += 1;
+    s.last_probability_body = Some(body);
+    s.last_key = headers
+        .get(crate::cournot::KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(Into::into);
+    let (code, b) = s.probability.clone().unwrap_or((
+        200,
+        serde_json::json!({"code": 0, "msg": "Success", "data": {"result": {"point_estimate": 0.5}}}),
+    ));
+    (
+        axum::http::StatusCode::from_u16(code).unwrap(),
+        axum::Json(b),
+    )
+}
+
+impl MockCournot {
+    pub async fn start(markets: Vec<serde_json::Value>) -> MockCournot {
+        use axum::routing::post;
+        let inner = std::sync::Arc::new(Mutex::new(MockCournotState {
+            markets,
+            ..Default::default()
+        }));
+        let router = axum::Router::new()
+            .route(crate::cournot::RESOLVE_PATH, post(mock_resolve))
+            .route(crate::cournot::PROBABILITY_PATH, post(mock_probability))
+            .with_state(inner.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        MockCournot {
+            base: format!("http://{addr}"),
+            inner,
+        }
+    }
+
+    pub fn state(&self) -> MockCournotState {
+        self.inner.lock().unwrap().clone()
+    }
+
+    pub fn set_probability(&self, status: u16, body: serde_json::Value) {
+        self.inner.lock().unwrap().probability = Some((status, body));
+    }
+
+    pub fn set_markets(&self, markets: Vec<serde_json::Value>) {
+        self.inner.lock().unwrap().markets = markets;
+    }
+}
