@@ -34,15 +34,13 @@ coin whose liquidity was paid for by the winners. Traders also get fast, CEX-lik
 - Low latency: a whitelisted backend sequencer matches orders and confirms them instantly. Every
   fill is settled and **fully checked onchain**, with no ZK proof.
 - One wallet signature per session (trading keys), then popup-free betting.
-- Memecoin launch through the **real Flap Pool Launch Portal**, with no mock and **no whitelist**.
-  On testnet, creation is open, so our own contract calls `launchTaxTokenV2` directly (verified
-  on a fork, see below).
+- Memecoin launch through the **real Flap Pool Launch Portal** via our own Launcher Factory (Flap
+  track rule), with one complete launch on live BSC testnet.
 
 ## Non-goals
 
 - ZK proofs, encrypted order data, recovery keys (all of biliquid's ZK machinery is dropped).
-- Flap's Launcher/factory route and its audit. They're only needed where Flap pauses creation
-  (mainnet today).
+- OpenFour (Four.meme) integration: a stretch goal after the Flap demo works.
 - Mainnet, live (non-fork) testnet deploys, fees beyond the per-launch cut, any collateral other
   than native BNB, ERC-1155 share tokens, buy/sell tax on the memecoin.
 - Price-range-on-a-date markets (the first idea). Only recurring Up/Down rounds.
@@ -156,8 +154,9 @@ The user picked B.
 
 ### Launch lifecycle
 
-1. **Create** (anyone, one transaction: `Exchange.createLaunch{value: SALT_LOCK_FEE}(...)` with a
-   pre-mined salt; `Exchange` locks the salt with the Portal and registers the game): memecoin name,
+1. **Create** (anyone, one transaction: `Portal.newLauncher{value: SALT_LOCK_FEE}(ourFactory, config)`
+   with a pre-mined salt; our Launcher locks the salt and the factory registers the game with
+   `Exchange`; see "Flap integration"): memecoin name,
    symbol, image URI; game feed + interval,
    where the interval must be allowed for that feed; **cut** (user's decision): one of 10% (default),
    15%, 20%, 25% or 30%, stored per launch and fixed for its lifetime; **graduation target** in BNB (creator's
@@ -293,21 +292,21 @@ The user picked B.
 - **Account**: deposit/withdraw BNB, a dev faucet (fork only, `anvil_setBalance`), trading-key
   session. Amounts show in BNB, with a USD estimate from the BNB/USD feed.
 
-### Flap integration (real Portal, direct launch, no whitelist)
+### Flap integration (real Portal, Launcher Factory route)
 
-- Vendor only `IPortal` (with `IPortalTypes`), `Distribution` and `IStrategy` from
-  `FlapPoolLaunchVaultExample/src/flap`. No Launcher or factory base is needed.
-- `Exchange` (or a small `LaunchManager` it owns; builder's choice):
-  - `createLaunch`: checks the salt makes a token address ending in `0x7777` (the
-    `ClonesUpgradeable.predictDeterministicAddress(TOKEN_IMPL, salt, PORTAL)` check), then
-    `PORTAL.lockSalt{value: SALT_LOCK_FEE}(salt, 0)` (0.005 BNB on testnet, paid by the creator).
-  - At graduation: `launchTaxTokenV2{value: raised}` with `totalSupply` 1B, `poolToken` 500M,
-    `quoteToken` address(0), `dexId` 0, `poolQuote` = raised, 1% buy/sell tax, one DEFLATION slot of
-    10000 bps, distribution EXPLICIT to itself for 500M, no creator buy.
-  - `initializeDistribution(token, amount, …)` (only from the Portal, once per launch): pulls the
-    500M and books it for that launch's losers. `claim(launchId)` pays them out.
-- Salt mining runs offchain (frontend), the same loop as the verified fork test.
-- Reference: the verified fork test is reproduced in the plan as the first Flap integration test.
+The Flap track requires "a Launcher Factory, a complete token launch on BSC Testnet, and a custom
+launch UI" (hackathon page, read 2026-11-25). This replaces the earlier direct-launch idea.
+- `BilauncherLauncherFactory` (on Flap's `LauncherFactoryBase`) deploys one `BilauncherLauncher`
+  (on `LauncherBase`, a beacon proxy as in Flap's `MintLauncherFactory`) per launch. Users create a
+  launch with `Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig))`. The
+  launcher locks the salt, and the factory registers the game with `Exchange`.
+- At graduation, `Exchange` sends the raised BNB to the launch's **rail** (`ILaunchRail.launch`).
+  The launcher calls `launchTaxTokenV2` (1B supply, 500M in the pool, 1% buy/sell tax burned,
+  distribution EXPLICIT to itself) and forwards the 500M to `Exchange`, where losers claim.
+- A factory must be opened by Flap (`setLauncherFactoryMultiplier`). On the fork we impersonate
+  Flap's admin; on live testnet Flap's team opens it (user to arrange). The demo ends with one real
+  graduation on live BSC testnet (about 2.5 tBNB needed).
+- The rail interface leaves room for an OpenFour rail later (stretch, BSC-mainnet fork only).
 
 ## Left to the builder
 

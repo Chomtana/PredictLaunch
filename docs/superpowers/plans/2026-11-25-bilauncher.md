@@ -7,8 +7,11 @@ price game. Winners are paid 1 − cut, the cut fills the launch's pool, losers 
 and graduation launches the token through the real Flap Portal.
 
 **Architecture:** One Solidity contract (`Exchange`) holds native-BNB balances, round positions and
-launches. It re-verifies every signed order in batches submitted by whitelisted operators, reads
-Atlas feeds for round prices, and calls Flap's `launchTaxTokenV2` directly at graduation. A Rust
+launches. It re-verifies every signed order in batches submitted by whitelisted operators and reads
+Atlas feeds for round prices. Launches are created through Flap's Pool Launch Portal and **our
+Launcher Factory** (required by the Flap track). At graduation, `Exchange` hands the raised BNB to
+the launch's **rail** (our `BilauncherLauncher`), which calls `launchTaxTokenV2`. The rail
+interface lets an OpenFour rail be added later. A Rust
 sequencer matches orders instantly (soft confirmation), cuts batches, and runs the keeper (snapshot,
 resolve, redeem, graduate). A React/Vite frontend talks to the sequencer API and the fork RPC. A
 feed relay keeps fork prices live.
@@ -43,12 +46,22 @@ Tracks C, S and F run as three parallel agents after Task 0. Each works only in 
 - Cut (bps): one of `1000, 1500, 2000, 2500, 3000`, default 1000, fixed per launch.
 - `minTarget`: admin-configurable, default `2.15 ether` (BNB).
 - Memecoin: `totalSupply = 1_000_000_000e18`, `poolToken = 500_000_000e18`, losers'
-  `LOSER_SUPPLY = 500_000_000e18`; tax 100 bps buy and sell, one DEFLATION slot of 10000 bps; quote
-  `address(0)`; `dexId 0`; distribution EXPLICIT to `Exchange`, `configData = abi.encode(launchId)`.
-- Flap (same address on 56/97): Portal `0x000042108465206185A077Edc3F3fd2b49060000`, token impl
+  `LOSER_SUPPLY = 500_000_000e18`; tax 100 bps buy and sell (the Portal rejects < 100), `taxDuration
+  30 days`, `antiFarmerDuration 1 days`, one DEFLATION slot of 10000 bps; quote `address(0)`;
+  `dexId 0`; distribution EXPLICIT to the Launcher itself (as in Flap's `MintLauncher`), and the
+  Launcher forwards the 500M to `Exchange`; creator shown via `LaunchExtensionHelper.encodeCreator`.
+- Flap (same address on 56/97): Portal `0x000042108465206185A077Edc3F3fd2b49060000`, testnet Guardian
+  `0x00004d58290854c5E9880F4b5B1993c6Ad8b0000`, token impl
   `0x7777c57ff7dc441c1715b2e36fa581c48B782222`; token address must end in `0x7777`;
-  `SALT_LOCK_FEE()` read live (0.005 BNB on testnet). Both are **constructor params** of
-  `Exchange` (tests can use stand-ins).
+  `SALT_LOCK_FEE()` read live (0.005 BNB on testnet). **Launches must go through
+  `Portal.newLauncher(ourFactory, data)`** (Flap track rule: "must use a Launcher Factory,
+  demonstrate a complete token launch on BSC Testnet, and provide a custom launch UI"). A factory
+  must be enabled by Flap (`setLauncherFactoryMultiplier`): on the fork we impersonate the
+  ProxyAdmin `owner()`; on live testnet the user asks Flap's team.
+- Flap base contracts are vendored from `github.com/flap-sh/FlapPoolLaunchVaultExample` `src/flap/`
+  (`LauncherBase`, `LauncherFactoryBase`, `LauncherHelper`, `LaunchExtensionHelper`, `ILauncher`,
+  `IPortal`, `IStrategy`, `Distribution`, `IVaultSchemas`, `LaunchVaultAddresses`). The reference
+  pair is `src/launcher/MintLauncher.sol` + `MintLauncherFactory.sol` (beacon proxy per launch).
 - Timing: `SNAP_TOLERANCE = 5 s`, `GRACE = 60 s`, `MAX_LAG = 15 s`, `FORCE_DELAY = 600 s`; rounds
   align to wall clock (`startTime = (now / interval + 1) * interval`).
 - Intervals: 300, 900, 3600, 86400 s, as a bitmask `1=5m 2=15m 4=1h 8=1d`. Fast feeds (BTCB, BNB,
@@ -101,9 +114,10 @@ Cancel(address owner,bytes32 orderHash,uint64 nonce)                    offchain
 ### Contract `Exchange` (contracts/src/Exchange.sol) — external surface
 
 ```solidity
-constructor(address portal, address tokenImpl, address owner);
+constructor(address owner);
 
 // admin (owner)
+function setFactory(address factory) external;                       // the only address allowed to registerLaunch
 function setOperator(address op, bool on) external;
 function setFeed(address feed, uint8 intervalMask) external;         // mask 0 = disabled
 function setMinTarget(uint256 bnb) external;                         // default 2.15 ether
@@ -121,16 +135,19 @@ function cancelOrder(Order calldata o) external;                     // owner on
 function bumpMinNonce(uint64 minNonce) external;                     // orders with nonce < minNonce are dead
 
 // launches and rounds
-struct CreateParams { string name; string symbol; string imageURI; address feed; uint32 interval;
+struct LaunchConfig { string name; string symbol; string imageURI; address feed; uint32 interval;
                       uint16 cutBps; uint256 target; uint64 deadline; bytes32 salt; }
-function createLaunch(CreateParams calldata p) external payable returns (uint256 launchId); // msg.value == SALT_LOCK_FEE
+// Users create a launch with Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig)).
+// The factory deploys a BilauncherLauncher (beacon proxy), whose initialize locks the salt, then calls:
+function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
+    external returns (uint256 launchId);                             // onlyFactory; validates c (see rules)
 function snapshot(uint256 launchId, uint32 boundary) external;       // boundary k at startTime + k*interval
 function resolve(uint256 launchId, uint32 round) external;           // sequential: round-1 must be resolved
 function redeem(uint256 launchId, uint32 round, address[] calldata users) external;
-function graduate(uint256 launchId) external;                        // status Graduating -> Graduated
+function graduate(uint256 launchId) external;                        // Graduating -> Graduated: ILaunchRail(rail).launch{value: raised}(launchId)
+function receiveLoserTokens(uint256 launchId, address token, uint256 amount) external; // rail only: pulls 500M
 function refundHaircut(uint256 launchId) external;                   // Failed launches, caller's own
 function claimTokens(uint256 launchId) external;                     // Graduated launches, incremental
-function initializeDistribution(address token, uint256 amount, bytes calldata configData, bytes32 salt) external; // Portal only
 
 // batches
 struct SignedOrder { Order order; bytes sig; }
@@ -151,9 +168,29 @@ function orderHash(Order calldata o) external view returns (bytes32);
 function withdrawQueueLength() external view returns (uint64);
 function withdrawProcessed() external view returns (uint64);
 ```
-`LaunchView { creator, feed, interval, cutBps, startTime, deadline, target, raised, status
+`LaunchView { creator, rail, feed, interval, cutBps, startTime, deadline, target, raised, status
 (0 Active, 1 Graduating, 2 Graduated, 3 Failed), token, totalLoserShares, lastResolved (rounds
 resolved count), name, symbol, imageURI }`.
+
+### Rail and Flap contracts
+
+```solidity
+interface ILaunchRail { function launch(uint256 launchId) external payable returns (address token, address pool); }
+
+// contracts/src/flap/BilauncherLauncherFactory.sol  (is LauncherFactoryBase)
+constructor(address hub, address guardian, address exchange);
+// _newLauncher(creator, data): c = abi.decode(data, (LaunchConfig)); deploy BeaconProxy;
+//   BilauncherLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
+//   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); BilauncherLauncher(l).setLaunchId(id)
+// launcherDataSchema(): fields name, symbol, imageURI, feed, interval, cutBps, target, deadline, salt
+
+// contracts/src/flap/BilauncherLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
+function initialize(address hub, address creator, address exchange, LaunchConfig calldata c) external payable; // once
+function launch(uint256 launchId) external payable returns (address token, address pool); // only exchange; launchTaxTokenV2{value: msg.value}
+function initializeDistribution(address token, uint256 amount, bytes calldata, bytes32) external; // onlyHub, during launch only
+// after the Portal call returns, launch() approves and calls exchange.receiveLoserTokens(launchId, token, 500M)
+// _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "bilauncher prediction launch"
+```
 `RoundView { startTime, endTime, startPrice, endPrice, startSet, endSet, resolved, outcome (0 Up,
 1 Down, 2 Void), pairs }`.
 
@@ -169,8 +206,11 @@ resolved count), name, symbol, imageURI }`.
 - `redeem`: Up/Down winner credit `win × (10000 − cut) / 10000` and `haircutPaid += win × cut /
   10000` (Failed launch: credit `win` in full); loser `loserShares += lose`; Void: credit
   `(up + down) / 2`. Clears the position. Idempotent per user.
-- `graduate`: Portal `launchTaxTokenV2{value: raised}`; `initializeDistribution` (Portal only,
-  once) pulls 500M for `abi.decode(configData,(uint256))`.
+- `registerLaunch` (factory only): feed enabled and interval in its mask, cut in the allowed set,
+  `target ≥ minTarget`, `deadline > startTime + interval`, name 1–32 bytes, symbol 1–10 bytes;
+  `startTime = (now / interval + 1) * interval`.
+- `graduate`: `ILaunchRail(rail).launch{value: raised}(id)`; the rail must call
+  `receiveLoserTokens` for exactly `LOSER_SUPPLY` before returning, or `graduate` reverts.
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
 - Batch: `lastBatchTs ≤ ts ≤ block.timestamp`, `block.timestamp − ts ≤ MAX_LAG`; apply keys, then
   fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid `min(requested,
@@ -233,6 +273,8 @@ keys:[{auth, hash, sig}], cancels:[{cancel, hash, sig}]}`. Signers: anvil keys #
 
 ## Task 0: Repo scaffold, SPEC.md, EIP-712 library, shared vectors (orchestrator, serial)
 
+(Also vendors the Flap base contracts into `contracts/src/flap/vendor/`, so Track C starts from them.)
+
 **Files:**
 - Create: `SPEC.md`, `README.md`, `Cargo.toml` (workspace: `core`, `sequencer`), `contracts/foundry.toml`,
   `contracts/remappings.txt`, `contracts/src/lib/Eip712.sol`, `contracts/test/Vectors.t.sol`,
@@ -268,18 +310,17 @@ keys:[{auth, hash, sig}], cancels:[{cancel, hash, sig}]}`. Signers: anvil keys #
 ## Track C — contracts (`contracts/`)
 
 Test helpers (C1 creates them, later tasks reuse): `test/helpers/MockFeed.sol` (settable
-`answer/updatedAt`, AggregatorV3 `latestRoundData`), `test/helpers/MockPortal.sol` (records
-`lockSalt`; `launchTaxTokenV2` deploys an OZ ERC20 of `totalSupply`, calls
-`IStrategy(d.strategy).initializeDistribution` after approving `d.amount`, keeps the BNB, returns
-`(token, address(0))`), and `test/helpers/Base.t.sol` (deploys `Exchange(mockPortal, impl,
-owner)`, registers a MockFeed with mask 15, funds Alice/Bob/Carol, and has helpers `_sign(order,
-pk)`, `_mineSalt()` and `_warpTo(t)`).
+`answer/updatedAt`, AggregatorV3 `latestRoundData`), `test/helpers/MockRail.sol` (an
+`ILaunchRail` that keeps the BNB, mints a 1B OZ ERC20 and calls `receiveLoserTokens`), and
+`test/helpers/Base.t.sol` (deploys `Exchange(owner)`, `setFactory(address(this))` so tests call
+`registerLaunch` directly with a MockRail, registers a MockFeed with mask 15, funds Alice/Bob/Carol,
+and has helpers `_sign(order, pk)` and `_warpTo(t)`). The real Flap factory and launcher are tested
+in C6 on the fork.
 
 ### Task C1: Admin, deposits, withdrawal queue
 
-**Files:** Create `contracts/src/Exchange.sol`, `contracts/src/interfaces/{IPortal.sol, IStrategy.sol,
-Distribution.sol, ISingleFeed.sol}` (vendor the first three from
-`FlapPoolLaunchVaultExample/src/flap`), the test helpers above, `contracts/test/Funds.t.sol`.
+**Files:** Create `contracts/src/Exchange.sol`, `contracts/src/interfaces/{ISingleFeed.sol,
+ILaunchRail.sol}`, the test helpers above, `contracts/test/Funds.t.sol`.
 
 **Interfaces:** Produces the constructor, `setOperator/setFeed/setMinTarget`, `deposit`,
 `requestWithdraw`, `forceWithdraw`, `claimPayout`, `balanceOf`, the withdraw queue views, and the
@@ -316,15 +357,13 @@ hash)` and `_applyKeyAuth(KeyAuth)` (replay-protected by `usedKeyNonce[owner][no
 
 **Files:** Modify `Exchange.sol`; Test `contracts/test/Rounds.t.sol`.
 
-**Interfaces:** Produces `createLaunch`, `snapshot`, `resolve`, `isTradable`, `getLaunch`,
-`roundInfo`, `launchCount`. Token address = `Clones.predictDeterministicAddress(tokenImpl, salt,
-portal)`; it must end in `0x7777` and is stored at create.
+**Interfaces:** Produces `registerLaunch`, `snapshot`, `resolve`, `isTradable`, `getLaunch`,
+`roundInfo`, `launchCount`.
 
 - [ ] **Step 1:** Failing tests:
-  - `test_createValidates`: rejects unlisted feed, an interval not in the mask (slow feed with 300),
-    cut 1200, `target < minTarget`, `deadline ≤ startTime + interval`, `msg.value != SALT_LOCK_FEE`,
-    and a salt without `0x7777`. Accepts a valid one: `startTime == (now/300+1)*300` and MockPortal
-    saw `lockSalt`.
+  - `test_registerValidates`: rejects a non-factory caller, unlisted feed, an interval not in the
+    mask (slow feed with 300), cut 1200, `target < minTarget`, `deadline ≤ startTime + interval`.
+    Accepts a valid one: `startTime == (now/300+1)*300`.
   - `test_snapshotWindow`: before t reverts; `updatedAt = t+6` reverts; `updatedAt = t+5` accepted;
     a second call reverts; after `t+61` reverts.
   - `test_resolveOutcomes`: end == start → Up; end < start → Down; `raised` grows by `pairs × cut`
@@ -378,20 +417,19 @@ events.
 
 **Files:** Modify `Exchange.sol`; Test `contracts/test/Lifecycle.t.sol`.
 
-**Interfaces:** Produces `redeem`, `graduate`, `initializeDistribution`, `claimTokens`,
+**Interfaces:** Produces `redeem`, `graduate`, `receiveLoserTokens`, `claimTokens`,
 `refundHaircut`.
 
 - [ ] **Step 1:** Failing tests:
   - `test_redeemWinnerGetsOneMinusCut`: cut 2500, winner of 2e18 shares is credited 1.5 BNB,
     `haircutPaid` = 0.5.
-  - `test_graduationLaunchesThroughPortal`: target 2.15, trade enough pairs, resolve →
-    Graduating; `graduate` → MockPortal got `raised` BNB, poolToken 500M, tax 100/100, a single
-    DEFLATION slot, distribution EXPLICIT to Exchange with `configData = abi.encode(id)`; Exchange
-    holds 500M; status Graduated; no round after it is tradable.
+  - `test_graduationCallsRail`: target 2.15, trade enough pairs, resolve → Graduating;
+    `graduate` → MockRail received exactly `raised` BNB; Exchange holds 500M; status Graduated; no
+    round after it is tradable; a rail that skips `receiveLoserTokens` makes `graduate` revert.
   - `test_incrementalClaimsSumToLoserSupply`: 3 losers across 2 rounds, claims made before and
     after redeeming the second round; the total paid equals 500M exactly (allow ≤ 2 wei of dust per
     claimer, and assert the dust stays in Exchange).
-  - `test_initializeDistributionOnlyPortalOnce`.
+  - `test_receiveLoserTokensOnlyRailOnce`.
   - `test_redeemAfterFailurePaysFull` and `test_refundHaircutAfterFailure`: winners of earlier
     rounds reclaim exactly `haircutPaid`; a second refund pays 0.
   - `test_voidRedeemsHalf`.
@@ -400,32 +438,42 @@ events.
 - [ ] **Step 4:** Run `forge test --mc Lifecycle`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(contracts): redeem, Flap graduation, loser claims, failure refunds`.
 
-### Task C6: Fork tests (real Portal + real feeds) and deploy script
+### Task C6: Flap Launcher Factory + Launcher, fork tests, deploy script
 
-**Files:** Create `contracts/test/fork/FlapFork.t.sol`, `contracts/test/fork/FeedFork.t.sol`,
-`contracts/script/Deploy.s.sol`, `contracts/script/feeds.json` (the spec's feed table: symbol,
-address, mask).
+**Files:** Create `contracts/src/flap/BilauncherLauncherFactory.sol`,
+`contracts/src/flap/BilauncherLauncher.sol`, `contracts/test/fork/FlapFork.t.sol`,
+`contracts/test/fork/FeedFork.t.sol`, `contracts/script/Deploy.s.sol`, `contracts/script/feeds.json`
+(the spec's feed table: symbol, address, mask).
 
-**Interfaces:** Produces `Deploy.s.sol` (env `OWNER`, `OPERATOR`; deploys
-`Exchange(0x0000421084…60000, 0x7777c57f…2222, OWNER)`, calls `setFeed` for every row of
-`feeds.json` and `setOperator(OPERATOR)`; writes `../.dev/deploy.json` `{exchange, chainId, owner,
-operator}`).
+**Interfaces:** Consumes the vendored Flap bases (Task 0) and `ILaunchRail`. Produces the factory
+and launcher exactly as in SPEC "Rail and Flap contracts", and `Deploy.s.sol` (env `OWNER`,
+`OPERATOR`, `OPEN_FACTORY=1` on forks only: impersonation isn't possible in a script, so the dev
+script opens it with `cast rpc anvil_impersonateAccount`). It deploys `Exchange(OWNER)` and the
+factory `(PORTAL, GUARDIAN, exchange)`, then calls `setFactory`, `setFeed` for every row of
+`feeds.json` and `setOperator(OPERATOR)`, and writes `../.dev/deploy.json` `{exchange, factory,
+chainId, owner, operator}`.
 
 - [ ] **Step 1:** Failing fork tests (skip without `BSC_TESTNET_RPC_URL`):
   - `FeedFork.test_slot32Layout`: for BTCB, BNB and ANKR, decoding `vm.load(feed, 0x32)` gives
     `latestRoundData` `answer/startedAt/updatedAt`.
-  - `FlapFork.test_graduateOnRealPortal`: deploy Exchange with the real Portal, create a launch
-    with a mined salt, `vm.store` the BTCB feed slot to drive snapshots, run rounds through
-    batches until `raised ≥ 2.15 BNB`, `graduate`; then the token ends in `7777`, Exchange holds
-    500M, the PancakeSwap pair is non-zero (router `0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3`
-    `factory().getPair(token, WBNB 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd)`).
+  - `FlapFork.test_unopenedFactoryRejected`: `newLauncher` reverts before Flap opens the factory.
+  - `FlapFork.test_graduateOnRealPortal`: deploy Exchange + factory, open the factory
+    (`vm.prank(IProxyAdmin(0x0000Ed588dfc01749C20bA69b5f8c77d706E0000).owner())`,
+    `setLauncherFactoryMultiplier(factory, 10_000, true)`), create a launch through
+    `portal.newLauncher{value: fee}(factory, abi.encode(cfg))` with a mined salt (as in
+    `ForkBase._mineSalt`), `vm.store` the BTCB feed slot `0x32` to drive snapshots, run rounds
+    through batches until `raised ≥ 2.15 BNB`, then `graduate`. Afterwards the token ends in `7777`,
+    `portal.getLauncher(launcher).launcherFactory == factory`, Exchange holds 500M, the
+    PancakeSwap pair is non-zero (router `0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3`
+    `factory().getPair(token, WBNB 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd)`), and
+    `description()` parses as Flap's v1 JSON.
 - [ ] **Step 2:** Run `forge test --mp "test/fork/*"` with the env set. Expected: FAIL first, PASS
   after Step 3.
-- [ ] **Step 3:** Fix whatever the real Portal rejects (the fee-config shape is the likeliest);
-  write `Deploy.s.sol`.
+- [ ] **Step 3:** Implement the factory and launcher (copy `MintLauncherFactory`/`MintLauncher`
+  structure), and fix whatever the real Portal rejects. Write `Deploy.s.sol`.
 - [ ] **Step 4:** Run `forge test` (all) and `forge script script/Deploy.s.sol` against a local
   `anvil --fork-url $BSC_TESTNET_RPC_URL`. Expected: all PASS; deploy.json written.
-- [ ] **Step 5: Commit** `test(contracts): fork tests on real Flap Portal and Atlas feeds; deploy script`.
+- [ ] **Step 5: Commit** `feat(contracts): Flap Launcher Factory rail, fork tests, deploy script`.
 
 ---
 
@@ -555,7 +603,8 @@ name "bilauncher".
 `signOrder`, `signCancel`, `signAuthorizeKey`; `units.ts`: `cost(amount, price)`, `payout(amount,
 cutBps)`, `toShares(bnbStake, price)` (rounded down to 1e16), `upTerms(outcome, side, price)`;
 `salt.ts`: `mineSalt(seed): Promise<Hex>` in a Web Worker (CREATE2 clone address of TOKEN_IMPL by
-PORTAL ends in `7777`); `chain.ts`: viem `exchangeAbi` (from SPEC) plus `createLaunch`, `deposit`,
+PORTAL ends in `7777`); `chain.ts`: viem `exchangeAbi` and `portalAbi` (`newLauncher`,
+`SALT_LOCK_FEE`) plus `createLaunch(cfg)` (encodes `LaunchConfig`, calls `newLauncher`), `deposit`,
 `requestWithdraw`, `claimTokens` and `refundHaircut` writers.
 
 - [ ] **Step 1:** Failing tests: `eip712.test.ts` matches `../fixtures/eip712-vectors.json`;
@@ -579,8 +628,9 @@ PORTAL ends in `7777`); `chain.ts`: viem `exchangeAbi` (from SPEC) plus `createL
 target` BNB with a USD estimate, live round Up ¢, status chip Active/Graduated/Failed, deadline
 countdown). Create form: name ≤ 32, symbol ≤ 10, image URL, feed select (from `/api/config`),
 interval options filtered by the feed's intervals, cut picker 10/15/20/25/30 (default 10), target ≥
-`minTarget`, deadline (datetime, > first round end); submit mines a salt, then sends `createLaunch`
-with `value = saltLockFee`. The Account drawer has deposit/withdraw BNB, the faucet button (when
+`minTarget`, deadline (datetime, > first round end); submit mines a salt, then creates the launch
+through `Portal.newLauncher{value: saltLockFee}(factory, abi.encode(LaunchConfig))` (Portal ABI
+from SPEC). The Account drawer has deposit/withdraw BNB, the faucet button (when
 the API allows it), and trading-key session status with an "Enable trading" button (one
 AuthorizeKey signature).
 
@@ -655,7 +705,9 @@ Test `frontend/scripts/feed-relay.test.ts`.
   enough that a launch graduates within ~30 rounds.
 - `scripts/dev.sh` (adapt biliquid's): `source .env` (fail if `BSC_TESTNET_RPC_URL` is unset) →
   `anvil --fork-url $BSC_TESTNET_RPC_URL --chain-id 97 --block-time 1` → `forge script Deploy`
-  (OWNER = anvil #0, OPERATOR = anvil #9) → feed relay → sequencer `--dev-faucet` → seed `--live` →
+  (OWNER = anvil #0, OPERATOR = anvil #9) → open the factory on the fork (`anvil_impersonateAccount`
+  the Portal ProxyAdmin owner, `cast send … setLauncherFactoryMultiplier(factory, 10000, true)`)
+  → feed relay → sequencer `--dev-faucet` → seed `--live` →
   Vite. Same flags as biliquid (`--no-seed`, `--no-live`, `--no-frontend`).
 
 - [ ] **Step 1:** Failing test `feed-relay.test.ts`: `decodeSlot32(word)` returns `{answer, startedAt,
@@ -681,3 +733,21 @@ Test `frontend/scripts/feed-relay.test.ts`.
 - [ ] **Step 3:** README: what it is, the `.env` setup, `scripts/dev.sh`, the MetaMask custom network
   (chain 97, `http://127.0.0.1:8545`, never mix it with the real testnet), and the dev wallet.
 - [ ] **Step 4: Commit** `test: end-to-end graduation on the fork; README`.
+
+### Task I3: Live BSC testnet launch (Flap track requirement)
+
+**Prerequisites (user):** Flap's team has opened our factory on testnet, and the deployer holds
+≥ 2.5 tBNB (2.15 target + fees + gas).
+
+- [ ] **Step 1:** `forge script Deploy --rpc-url $BSC_TESTNET_RPC_URL --broadcast` (without
+  `OPEN_FACTORY`), and record the addresses in `deployments/bsc-testnet.json`.
+- [ ] **Step 2:** Run the sequencer and frontend against live testnet (no feed relay needed), create
+  one BTCB 5m launch with target 2.15, trade it to graduation with the bots, and confirm on BscScan
+  testnet: the `newLauncher` tx, the `launchTaxTokenV2` tx, the token `…7777`, and the PancakeSwap pair.
+- [ ] **Step 3:** Put the tx links in the README "Live testnet launch" section. **Commit**.
+
+### Stretch (only after I3): OpenFour rail
+
+An `OpenFourRail` implementing `ILaunchRail` on a BSC-mainnet fork with a custom preset (OpenFour
+is deployed only on mainnet; custom presets need their governance). Not planned in detail; open a
+new brainstorm when the core is done.
