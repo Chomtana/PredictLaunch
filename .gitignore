@@ -32,3 +32,4 @@ dist/
 
 # Agent worktrees
 .claude/worktrees/
+contracts/broadcast/
