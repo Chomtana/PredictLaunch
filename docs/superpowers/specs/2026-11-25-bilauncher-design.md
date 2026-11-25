@@ -1,6 +1,6 @@
 # bilauncher — design
 
-Date: 2026-11-25. Status: draft for approval.
+Date: 2026-11-25. Status: ready for approval (builder check done).
 
 ## Intent
 
@@ -117,14 +117,22 @@ The user picked B.
 
 1. **Create** (anyone, one transaction): memecoin name, symbol, image URI; game feed + interval,
    where the interval must be allowed for that feed; **graduation target** in USDT (creator's
-   choice, minimum 100 USDT). The game's round 0 starts at the next interval boundary (rounds align
+   choice, minimum 100 USDT); **deadline** (creator's choice). The game's round 0 starts at the next interval boundary (rounds align
    to wall clock: 5m rounds at :00, :05, ...).
 2. **Active**: rounds run back to back. Each round's 10% haircut adds to `raised`.
 3. **Graduate**: when the resolve that pushes `raised ≥ target` lands, the launch graduates in the
    same transaction. That round is the last one, and every round after it is untradable. The whole
    `raised` amount (overshoot included) becomes pool liquidity through the mock Portal. Total
    supply is fixed (1,000,000,000 tokens): 50% to the pool, 50% claimable by losers.
-4. **Claim**: a loser's allocation = `loserShares[user] / totalLoserShares × 50% of supply`, where
+4. **Fail** (user's decision): the creator also sets a **deadline** at creation. If the deadline
+   passes before graduation, the launch fails: the game stops (no round starting after the deadline
+   is tradable, and the round in progress at the deadline still resolves normally), and **winners get
+   the full 1.00**. Each winner reclaims the 0.10 per winning share that was held back. To support
+   this, redeem records `haircutPaid[launch][user] += 0.10 × winningShares`, and the haircut USDT
+   stays in `Exchange` (not the Launcher) until graduation. On failure, `refundHaircut(launch)`
+   credits `haircutPaid` back to the user's balance. Loser shares of a failed launch are worth
+   nothing.
+5. **Claim**: a loser's allocation = `loserShares[user] / totalLoserShares × 50% of supply`, where
    `loserShares` sums the losing shares the user held at the resolution of each of the launch's
    rounds.
 
