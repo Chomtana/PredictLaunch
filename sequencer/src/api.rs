@@ -30,6 +30,8 @@ use crate::chain::Chain;
 use crate::views;
 
 pub const FAUCET_BNB: u128 = 1000;
+/// Quote tokens the dev faucet mints when the Exchange's quote is an ERC20 (launch targets start at 1500).
+pub const FAUCET_QUOTE: u128 = 10_000;
 
 pub fn router<C: Chain>(app: Arc<App<C>>) -> Router {
     Router::new()
@@ -78,6 +80,8 @@ pub fn config_json<C: Chain>(app: &App<C>) -> Value {
         "portal": s.portal,
         "saltLockFee": app.info.salt_lock_fee.to_string(),
         "minTarget": app.info.min_target.to_string(),
+        "quoteToken": app.info.quote_token,
+        "quoteSymbol": s.quote_symbol.as_deref().unwrap_or(&app.info.quote_symbol),
         "cuts": CUTS,
         "feeds": FEEDS.iter().map(|(sym, a)| json!({"address": a, "symbol": sym})).collect::<Vec<_>>(),
         "minDuration": MIN_DURATION,
@@ -262,10 +266,30 @@ async fn faucet<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> R
             None,
         );
     };
+    // Native gas (`anvil_setBalance`, fork only) and, with an ERC20 quote, a mint of the quote token. With an
+    // ERC20 quote the gas top-up is best effort, so the faucet still mints on a live node.
     let amount = U256::from(FAUCET_BNB * ONE_BNB);
-    match app.chain.set_balance(a, amount).await {
+    let quote = app.info.quote_token;
+    let quote_amount = U256::from(FAUCET_QUOTE * ONE_BNB);
+    let res = async {
+        if quote.is_zero() {
+            app.chain.set_balance(a, amount).await?;
+        } else {
+            if let Err(e) = app.chain.set_balance(a, amount).await {
+                tracing::debug!("faucet: no gas top-up ({e:#})");
+            }
+            app.chain.mint_quote(quote, a, quote_amount).await?;
+        }
+        anyhow::Ok(())
+    }
+    .await;
+    match res {
         Ok(()) => {
-            Json(json!({ "ok": true, "address": a, "balance": amount.to_string() })).into_response()
+            let mut v = json!({ "ok": true, "address": a, "balance": amount.to_string() });
+            if !quote.is_zero() {
+                v["quote"] = json!(quote_amount.to_string());
+            }
+            Json(v).into_response()
         }
         Err(e) => err(
             StatusCode::BAD_GATEWAY,

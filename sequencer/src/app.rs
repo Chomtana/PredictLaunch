@@ -27,6 +27,9 @@ pub struct Settings {
     pub start_block: u64,
     /// Atlas offchain price API for the chart stream (`None`: onchain feeds only).
     pub price_api: Option<String>,
+    /// Display name of the quote token, overriding its on-chain symbol (Flap's faucet "USD" is shown as
+    /// "USDT"). `None`: the on-chain symbol.
+    pub quote_symbol: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

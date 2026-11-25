@@ -4,7 +4,7 @@ import { useApp } from '../state.tsx'
 import { Logo } from './ui.tsx'
 
 export function Header({ route }: { route: string }) {
-  const { config, configError, wsUp, wallet, user, bnbUsd, setAccountOpen, keyState } = useApp()
+  const { config, configError, wsUp, wallet, user, bnbUsd, quoteSymbol, setAccountOpen, keyState } = useApp()
   const online = !!config && !configError
   return (
     <header className="header">
@@ -35,7 +35,7 @@ export function Header({ route }: { route: string }) {
         </a>
         {wallet ? (
           <button className="btn account-btn" onClick={() => setAccountOpen(true)}>
-            <span className="mono">{user ? fmtBnb(user.balance, 3) : '…'} BNB</span>
+            <span className="mono">{user ? fmtBnb(user.balance, 3) : '…'} {quoteSymbol}</span>
             <span className="addr">
               {keyState === 'active' && <i className="dot ok" title="Trading enabled" />}
               {shortAddr(wallet.address)}

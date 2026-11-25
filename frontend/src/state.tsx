@@ -163,6 +163,11 @@ function useAppState() {
 
   const priceOf = useCallback((f: Address | string | null | undefined) => (f ? (prices[lc(f)]?.price ?? null) : null), [prices])
   const bnbUsd = priceOf(bnbFeed)
+  // The Exchange's collateral: native BNB (priced by the BNB feed) or a USD token (priced at 1).
+  const quoteToken = (config?.quoteToken ?? chainLib.NATIVE) as Address
+  const quoteNative = chainLib.isNative(quoteToken)
+  const quoteSymbol = config?.quoteSymbol ?? 'BNB'
+  const quoteUsd = quoteNative ? bnbUsd : 10n ** 18n
   const feedSymbol = useCallback((f: string) => config?.feeds.find((x) => lc(x.address) === lc(f))?.symbol ?? '', [config])
 
   // ---------------------------------------------------------------- websocket
@@ -251,11 +256,12 @@ function useAppState() {
       .user(wallet.address)
       .then(setUser)
       .catch(() => {})
-    publicClient
-      ?.getBalance({ address: wallet.address })
-      .then(setWalletBalance)
-      .catch(() => {})
-  }, [wallet, publicClient])
+    if (publicClient)
+      chainLib
+        .quoteBalance(publicClient, quoteToken, wallet.address)
+        .then(setWalletBalance)
+        .catch(() => {})
+  }, [wallet, publicClient, quoteToken])
 
   useEffect(() => {
     if (!wallet) return
@@ -312,8 +318,9 @@ function useAppState() {
   )
 
   const deposit = useCallback(
-    (amount: bigint) => wallet && config && runTx('Deposit', () => chainLib.deposit(wallet.client, wallet.account, config.exchange, amount), 'Balance credited'),
-    [wallet, config, runTx],
+    (amount: bigint) =>
+      wallet && config && publicClient && runTx('Deposit', () => chainLib.deposit(wallet.client, publicClient, wallet.account, config.exchange, quoteToken, amount), 'Balance credited'),
+    [wallet, config, publicClient, quoteToken, runTx],
   )
   const withdraw = useCallback(
     (amount: bigint) =>
@@ -330,12 +337,13 @@ function useAppState() {
     if (!wallet) return
     try {
       await api.faucet(wallet.address)
-      toast({ kind: 'success', title: 'Faucet', body: '1,000 test BNB sent to your wallet' })
+      const body = quoteNative ? '1,000 test BNB sent to your wallet' : `10,000 test ${quoteSymbol} and 1,000 BNB for gas sent to your wallet`
+      toast({ kind: 'success', title: 'Faucet', body })
       refreshUser()
     } catch (e) {
       toast({ kind: 'error', title: 'Faucet unavailable', body: e instanceof ApiError ? e.message : errMsg(e) })
     }
-  }, [wallet, toast, refreshUser])
+  }, [wallet, toast, refreshUser, quoteNative, quoteSymbol])
 
   /** Mines a salt, then Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)). */
   const createLaunch = useCallback(
@@ -419,6 +427,9 @@ function useAppState() {
     priceOf,
     bnbUsd,
     bnbFeed,
+    quoteToken,
+    quoteSymbol,
+    quoteUsd,
     feedSymbol,
     onPriceTick,
     live,
@@ -460,6 +471,12 @@ const Ctx = createContext<AppState | null>(null)
 export function AppProvider({ children }: { children: ReactNode }) {
   const s = useAppState()
   return <Ctx.Provider value={s}>{children}</Ctx.Provider>
+}
+
+/** The quote token's symbol and USD price; works outside AppProvider (component tests): BNB, unpriced. */
+export function useQuote(): { symbol: string; usd: bigint | null } {
+  const s = useContext(Ctx)
+  return { symbol: s?.quoteSymbol ?? 'BNB', usd: s?.quoteUsd ?? null }
 }
 
 export function useApp(): AppState {

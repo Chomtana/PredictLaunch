@@ -27,7 +27,12 @@ struct T {
 
 impl T {
     async fn new(dev_faucet: bool) -> T {
+        Self::with_quote(dev_faucet, Address::ZERO, None).await
+    }
+
+    async fn with_quote(dev_faucet: bool, quote: Address, quote_symbol: Option<&str>) -> T {
         let chain = FakeChain::new();
+        chain.0.lock().unwrap().quote_token = quote;
         let (alice, bob) = (TestKey::from_seed("alice"), TestKey::from_seed("bob"));
         chain.push(launch_event(0, now_secs() + 3600, FEED));
         chain.push(deposit(alice.address(), 10));
@@ -42,6 +47,7 @@ impl T {
             dev_faucet,
             start_block: 0,
             price_api: None,
+            quote_symbol: quote_symbol.map(Into::into),
         };
         let app = App::new(chain, settings).await.unwrap();
         let router = api::router(app.clone());
@@ -373,4 +379,29 @@ async fn faucet_disabled_by_default() {
         t.app.chain.0.lock().unwrap().balances[&t.alice.address()],
         U256::from(1000u128 * E18)
     );
+}
+
+#[tokio::test]
+async fn erc20_quote_config_and_faucet_mint() {
+    let t = T::new(true).await;
+    let (_, v) = t.req("GET", "/api/config", None).await;
+    assert_eq!(v["quoteToken"], json!(Address::ZERO));
+    assert_eq!(v["quoteSymbol"], "BNB");
+    t.req("POST", "/api/faucet", Some(json!({"address": t.alice.address()})))
+        .await;
+    assert!(t.app.chain.0.lock().unwrap().quote_mints.is_empty(), "native: no mint");
+
+    let usd = Address::repeat_byte(0x55);
+    let t = T::with_quote(true, usd, Some("USDT")).await;
+    let (_, v) = t.req("GET", "/api/config", None).await;
+    assert_eq!(v["quoteToken"], json!(usd));
+    assert_eq!(v["quoteSymbol"], "USDT", "display override wins over the on-chain USD");
+    let (s, v) = t
+        .req("POST", "/api/faucet", Some(json!({"address": t.alice.address()})))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["quote"], (10_000u128 * E18).to_string());
+    let i = t.app.chain.0.lock().unwrap();
+    assert_eq!(i.quote_mints[&t.alice.address()], U256::from(10_000u128 * E18));
+    assert_eq!(i.balances[&t.alice.address()], U256::from(1000u128 * E18), "gas too");
 }

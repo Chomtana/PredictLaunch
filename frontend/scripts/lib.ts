@@ -1,9 +1,9 @@
 // Shared helpers for the local-fork scripts (seed.ts, e2e.ts). LOCAL ONLY: public anvil dev keys.
 
 import { readFileSync } from 'node:fs'
-import { createPublicClient, createWalletClient, decodeEventLog, encodeFunctionData, http, parseAbi, parseEther, type Address, type Hex, type LocalAccount } from 'viem'
+import { createPublicClient, createWalletClient, decodeEventLog, encodeAbiParameters, encodeFunctionData, http, keccak256, parseAbi, parseEther, toHex, type Address, type Hex, type LocalAccount } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { chainFor, encodeLaunchConfig, exchangeAbi, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
+import { chainFor, deposit as depositTx, encodeLaunchConfig, exchangeAbi, isNative, NATIVE, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
 
@@ -39,7 +39,13 @@ export const feedAbi = parseAbi([
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
 ])
 
-export const railAbi = parseAbi(['function launch(uint256 launchId) payable returns (address token, address pool)'])
+export const railAbi = parseAbi(['function launch(uint256 launchId, uint256 quoteAmount) payable returns (address token, address pool)'])
+
+/** Flap's testnet faucet USDT (on-chain "USD", 18 decimals, permissionless mint; balances mapping at slot 0). */
+export const FLAP_USDT: Address = '0x190C989D5665a0e404B444b53CAE9AbCfb600157'
+const mintAbi = parseAbi(['function mint(address to, uint256 amount)'])
+/** Storage slot of `balanceOf[who]` for an OZ ERC20 whose `_balances` is slot 0 (FLAP_USDT). */
+const balanceSlot = (who: Address) => keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [who, 0n]))
 
 export const exchangeExtraAbi = parseAbi([
   'event LaunchCreated(uint256 launchId, address creator, address rail, address token, address feed, uint256 strike, uint64 settleTime, uint16 cutBps, uint256 target, string name, string symbol, string imageURI)',
@@ -51,6 +57,8 @@ export interface Deploy {
   exchange: Address
   factory: Address
   chainId: number
+  /** Exchange collateral; absent or zero = native BNB. */
+  quoteToken?: Address
 }
 
 export function setup(rpc: string, api: string, deployPath: string) {
@@ -58,6 +66,12 @@ export function setup(rpc: string, api: string, deployPath: string) {
   const chain = chainFor(97, rpc)
   const pc = createPublicClient({ chain, transport: http(rpc), pollingInterval: 500 })
   const D: Domain = { chainId: 97, exchange: deploy.exchange }
+  const quote: Address = deploy.quoteToken ?? NATIVE
+  const native = isNative(quote)
+  /** Display unit of every Exchange amount. */
+  const Q = native ? 'BNB' : 'USDT'
+  /** Size scale of the demo amounts: BNB amounts x1000 in USDT (the Portal's pool floor is ~$1500 = 2.15 BNB). */
+  const K = native ? 1 : 1000
 
   async function get<T = any>(path: string): Promise<T> { // eslint-disable-line @typescript-eslint/no-explicit-any
     const r = await fetch(api + path)
@@ -135,9 +149,11 @@ export function setup(rpc: string, api: string, deployPath: string) {
       await pc.call({
         account: deploy.exchange,
         to: rail,
-        data: encodeFunctionData({ abi: railAbi, functionName: 'launch', args: [id] }),
-        value,
-        stateOverride: [{ address: deploy.exchange, balance: value * 2n }],
+        data: encodeFunctionData({ abi: railAbi, functionName: 'launch', args: [id, value] }),
+        ...(native
+          ? { value, stateOverride: [{ address: deploy.exchange, balance: value * 2n }] }
+          : // ERC20: the Exchange would have transferred `value` to the rail first; fake that balance.
+            { stateOverride: [{ address: deploy.exchange, balance: parseEther('1') }, { address: quote, stateDiff: [{ slot: balanceSlot(rail), value: toHex(value, { size: 32 }) }] }] }),
       })
     } catch {
       /* expected: receiveLoserTokens rejects a launch that is not Graduated */
@@ -145,15 +161,31 @@ export function setup(rpc: string, api: string, deployPath: string) {
     return Date.now() - t
   }
 
-  /** Fund (dev faucet, else anvil_setBalance), deposit into the Exchange, authorize a trading key. */
-  async function makeBot(acct: LocalAccount, depositBnb: bigint): Promise<Bot> {
+  /** Gas (dev faucet, else anvil_setBalance) and, for an ERC20 quote, `quoteAmount` minted (the faucet's mint, plus a
+   *  direct mint for the rest: FLAP_USDT's mint is public). */
+  async function fund(acct: LocalAccount, quoteAmount: bigint) {
+    let fromFaucet = 0n
     try {
-      await post('/api/faucet', { address: acct.address })
+      const r = await post<{ quote?: string }>('/api/faucet', { address: acct.address })
+      fromFaucet = BigInt(r.quote ?? '0')
     } catch {
       await pc.request({ method: 'anvil_setBalance' as never, params: [acct.address, '0x' + parseEther('1000').toString(16)] as never })
     }
+    if (!native && quoteAmount > fromFaucet) await send(acct, { address: quote, abi: mintAbi, functionName: 'mint', args: [acct.address, quoteAmount - fromFaucet] })
+  }
+
+  /** Exchange.deposit of `amount` (approving first for an ERC20 quote). */
+  async function depositQuote(acct: LocalAccount, amount: bigint) {
+    const hash = await depositTx(wallet(acct), pc, acct, deploy.exchange, quote, amount)
+    const rc = await pc.waitForTransactionReceipt({ hash })
+    if (rc.status !== 'success') throw new Error(`deposit reverted (${hash})`)
+  }
+
+  /** Fund, deposit into the Exchange, authorize a trading key. */
+  async function makeBot(acct: LocalAccount, depositAmount: bigint): Promise<Bot> {
     const have = await pc.readContract({ address: deploy.exchange, abi: exchangeAbi, functionName: 'balanceOf', args: [acct.address] })
-    if (have < depositBnb) await send(acct, { address: deploy.exchange, abi: exchangeAbi, functionName: 'deposit', value: depositBnb - have })
+    await fund(acct, depositAmount > have ? depositAmount - have : 0n)
+    if (have < depositAmount) await depositQuote(acct, depositAmount - have)
     await post('/api/poke')
     const key = privateKeyToAccount(generatePrivateKey())
     const a = { owner: acct.address, key: key.address, expiry: (await chainNow()) + 7n * 86400n, nonce: randomNonce() }
@@ -166,12 +198,8 @@ export function setup(rpc: string, api: string, deployPath: string) {
   async function topUp(b: Bot, min = 100n * E18, amount = 200n * E18) {
     const u = await get<{ free?: string; balance: string }>(`/api/user/${b.owner}`)
     if (BigInt(u.free ?? u.balance) >= min) return false
-    try {
-      await post('/api/faucet', { address: b.owner })
-    } catch {
-      await pc.request({ method: 'anvil_setBalance' as never, params: [b.owner, '0x' + parseEther('1000').toString(16)] as never })
-    }
-    await send(b.acct, { address: deploy.exchange, abi: exchangeAbi, functionName: 'deposit', value: amount })
+    await fund(b.acct, amount)
+    await depositQuote(b.acct, amount)
     await post('/api/poke')
     return true
   }
@@ -224,7 +252,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, makeBot, topUp, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, fund, depositQuote, makeBot, topUp, place, cancelAll }
 }
 
 export interface Bot {

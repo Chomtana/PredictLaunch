@@ -230,7 +230,7 @@ contract BatchTest is Base {
 
     function _depositFrom(address u, uint256 amt) internal {
         vm.prank(u);
-        ex.deposit{value: amt}();
+        ex.deposit{value: amt}(amt);
     }
 
     function test_onlyOperator() public {

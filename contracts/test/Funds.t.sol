@@ -13,7 +13,7 @@ contract Rejecter {
     }
 
     function dep() external {
-        ex.deposit{value: address(this).balance}();
+        ex.deposit{value: address(this).balance}(address(this).balance);
     }
 
     function req(uint256 a) external returns (uint64) {

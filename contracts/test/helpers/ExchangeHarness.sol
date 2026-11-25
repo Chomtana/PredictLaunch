@@ -6,7 +6,7 @@ import {Eip712} from "src/lib/Eip712.sol";
 
 /// Test-only: exposes internal checks.
 contract ExchangeHarness is Exchange {
-    constructor(address o) Exchange(o) {}
+    constructor(address o) Exchange(o, address(0)) {}
 
     function checkSig(Eip712.Order calldata o, bytes calldata sig, uint64 ts) external view returns (bytes32) {
         return _checkSig(o, sig, ts);

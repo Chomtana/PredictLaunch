@@ -29,7 +29,7 @@ const config: Config = {
 const priceOf = (f: Address) => (f === BTC ? 100_000n * E18 : f === BNB ? 600n * E18 : null)
 
 function setup(onSubmit = vi.fn(async () => {})) {
-  render(<CreateLaunchForm config={config} priceOf={priceOf} bnbUsd={600n * E18} connected onSubmit={onSubmit} />)
+  render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={onSubmit} />)
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Moon Dog' } })
   fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'MDOG' } })
   return onSubmit
@@ -59,6 +59,17 @@ describe('CreateLaunchForm', () => {
     expect(screen.getByText(/at least 2.15 BNB/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText(/Target/), { target: { value: '3' } })
     expect(submit().disabled).toBe(false)
+  })
+
+  it('USDT quote: target in USDT from minTarget, priced at $1', () => {
+    const usdt = { ...config, quoteToken: '0x190C989D5665a0e404B444b53CAE9AbCfb600157' as Address, quoteSymbol: 'USDT', minTarget: (1500n * E18).toString() }
+    render(<CreateLaunchForm config={usdt} priceOf={priceOf} quoteUsd={E18} connected onSubmit={vi.fn(async () => {})} />)
+    expect(screen.getByLabelText('Target (USDT)')).toBeTruthy()
+    expect((screen.getByLabelText(/Target/) as HTMLInputElement).value).toBe('1500')
+    expect(screen.getByText(/1,500\.00 · pool needed/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText(/Target/), { target: { value: '1000' } })
+    expect(screen.getByText(/at least 1,500.00 USDT/)).toBeTruthy()
+    expect(screen.getByText(/backed by 1 USDT/)).toBeTruthy()
   })
 
   it('settlement under 5 minutes out disables submit', () => {

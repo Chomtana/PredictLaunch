@@ -2,7 +2,8 @@
 
 A memecoin launchpad where each launch's liquidity is raised by a Polymarket-style "Up or Down"
 prediction market on an Atlas Oracle feed. The creator picks a feed, a **strike** (price to beat) and
-a **settlement time**. Traders buy Up or Down shares (1 Up + 1 Down are always backed by 1 BNB).
+a **settlement time**. Traders buy Up or Down shares (1 Up + 1 Down are always backed by 1 unit of the quote token: native
+BNB, or on the testnet dev stack Flap's faucet USDT).
 At settlement, winners are paid 1 − cut per share, the cut fills the launch's pool, losers claim the
 memecoin, and graduation launches the token through Flap's Pool Launch Portal via our Launcher
 Factory, with a PancakeSwap pool. If the target isn't reached, winners are paid in full.
@@ -46,10 +47,18 @@ It runs, in order: `anvil --fork-url $BSC_TESTNET_RPC_URL --chain-id 97 --block-
 `forge script Deploy` (owner anvil #0, operator anvil #9) → `contracts/script/fork-setup.sh`
 (authorizes the Exchange on every Atlas feed and opens the factory on the Flap Portal) → the feed
 relay (copies live testnet prices into the fork every 2 s) → the sequencer (`--dev-faucet`) → the
-seed bots (two launches: BTCB, strike = now, settles in 15 min, cut 10%, target 2.15 BNB; BNB,
-strike = now + 1%, settles in 30 min, cut 30%, target 3 BNB; a maker and two takers trading around
+seed bots (two launches: BTCB, strike = now, settles in 15 min, cut 10%, target 2,150 USDT; BNB,
+strike = now + 1%, settles in 30 min, cut 30%, target 3,000 USDT; a maker and two takers trading around
 a Black-Scholes-style fair price) → Vite. When both seeded launches have settled, the bots create a
 new pair. Logs are in `.dev/*.log`; Ctrl-C stops everything.
+
+**Quote token.** By default the Exchange's collateral is Flap's testnet faucet USDT
+(`0x190C989D5665a0e404B444b53CAE9AbCfb600157`, on-chain symbol "USD", 18 decimals). Its `mint` is
+public, so bots, the dev faucet and anyone on live testnet can mint it
+([abc.flap.sh/faucet](https://abc.flap.sh/faucet?lang=en)); only gas and the 0.005 BNB salt-lock fee
+need tBNB. The Portal's pool floor is 1,500 USDT, so `minTarget` is 1,500 and every demo amount is
+x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUOTE_TOKEN` and
+`MIN_TARGET` env on `Deploy.s.sol`).
 
 ### MetaMask
 
@@ -58,7 +67,7 @@ symbol BNB. It has the same chain ID as the real BSC testnet: keep it a separate
 the two, and never send real testnet funds to the dev keys. Import an anvil dev key (PUBLIC keys,
 fork only), for example #0 `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` or
 #1 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d`. The faucet button in the
-app gives any address 1000 fork BNB (`POST /api/faucet`, dev only).
+app gives any address 1000 fork BNB for gas and 10,000 USDT (`POST /api/faucet`, dev only).
 
 ### Dev wallet
 
@@ -74,9 +83,9 @@ scripts/e2e.sh                 # ~13 min, real time; prints "E2E OK"
 ```
 
 It starts `dev.sh --no-frontend --no-seed`, then `frontend/scripts/e2e.ts` creates a BTCB launch
-settling 10 min out (cut 10%, target 2.15), two bots mint 25 BNB of pairs, and it waits for the
+settling 10 min out (cut 10%, target 2,150 USDT), two bots mint 25,000 USDT of pairs, and it waits for the
 keeper to snapshot, resolve, redeem and graduate through the real Flap Portal. It asserts the token
-ends in `7777`, a PancakeSwap pair exists, the loser claims > 0 tokens, the winner's balance rose by
+ends in `7777`, a token/USDT PancakeSwap pair holds the raise, the loser claims > 0 tokens, the winner's balance rose by
 (1 − cut) per winning share, and `/api/status.softReversals == 0`.
 
 ## Tests

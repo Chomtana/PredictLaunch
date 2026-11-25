@@ -15,8 +15,12 @@ interface IChainlinkDecimals {
     function decimals() external view returns (uint8);
 }
 
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
+}
+
 /// @title bilauncher Exchange
-/// @notice Native-BNB custody, binary Up/Down markets (one per launch), batched settlement of signed orders, and
+/// @notice Quote-token custody (native BNB or one ERC20, fixed at deploy), binary Up/Down markets (one per launch), batched settlement of signed orders, and
 ///         graduation of each launch's memecoin through its rail (a Flap Launcher). See SPEC.md.
 contract Exchange is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -48,6 +52,9 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     /// @notice EIP-712 domain: ("bilauncher", "1", chainid, this).
     bytes32 public immutable DOMAIN_SEPARATOR;
+    /// @notice The collateral every balance, share pair and raise is denominated in: address(0) = native BNB,
+    ///         otherwise an 18-decimal ERC20 (1 pair is backed by exactly 1e18 of it).
+    address public immutable quoteToken;
 
     // ---------------------------------------------------------------------------------------------------------
     // Types
@@ -258,13 +265,16 @@ contract Exchange is Ownable, ReentrancyGuard {
     error LoserTokensMissing();
     error LoserTokensAlreadyIn();
     error BadToken();
+    error BadValue();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
         _;
     }
 
-    constructor(address owner_) Ownable(owner_) {
+    constructor(address owner_, address quoteToken_) Ownable(owner_) {
+        if (quoteToken_ != address(0) && IERC20Decimals(quoteToken_).decimals() != 18) revert BadToken();
+        quoteToken = quoteToken_;
         minTarget = 2.15 ether;
         DOMAIN_SEPARATOR = Eip712.domainSeparator(block.chainid, address(this));
     }
@@ -294,19 +304,31 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit FallbackFeedSet(feed, chainlink);
     }
 
-    function setMinTarget(uint256 bnb) external onlyOwner {
-        minTarget = bnb;
-        emit MinTargetSet(bnb);
+    function setMinTarget(uint256 amount) external onlyOwner {
+        minTarget = amount;
+        emit MinTargetSet(amount);
     }
 
     // ---------------------------------------------------------------------------------------------------------
     // Funds
     // ---------------------------------------------------------------------------------------------------------
 
-    function deposit() external payable {
-        if (msg.value == 0) revert ZeroAmount();
-        balanceOf[msg.sender] += msg.value;
-        emit Deposited(msg.sender, msg.value);
+    /// @notice Credit `amount` of the quote token. Native: send exactly `amount` as value. ERC20: approve first,
+    ///         send no value; the amount actually received is credited.
+    function deposit(uint256 amount) external payable nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        address q = quoteToken;
+        if (q == address(0)) {
+            if (msg.value != amount) revert BadValue();
+        } else {
+            if (msg.value != 0) revert BadValue();
+            uint256 before = IERC20(q).balanceOf(address(this));
+            IERC20(q).safeTransferFrom(msg.sender, address(this), amount);
+            amount = IERC20(q).balanceOf(address(this)) - before;
+            if (amount == 0) revert ZeroAmount();
+        }
+        balanceOf[msg.sender] += amount;
+        emit Deposited(msg.sender, amount);
     }
 
     /// @notice Queue a withdrawal. Nothing is locked: the next batch pays `min(amount, balance)` at that time.
@@ -331,8 +353,13 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint256 amt = pendingPayout[msg.sender];
         if (amt == 0) revert NothingToClaim();
         pendingPayout[msg.sender] = 0;
-        (bool ok,) = msg.sender.call{value: amt}("");
-        if (!ok) revert TransferFailed();
+        address q = quoteToken;
+        if (q == address(0)) {
+            (bool ok,) = msg.sender.call{value: amt}("");
+            if (!ok) revert TransferFailed();
+        } else {
+            IERC20(q).safeTransfer(msg.sender, amt);
+        }
         emit PayoutClaimed(msg.sender, amt);
     }
 
@@ -353,9 +380,13 @@ contract Exchange is Ownable, ReentrancyGuard {
         if (paid > 0) _payOut(w.user, paid);
     }
 
-    /// @dev Push with a 10k-gas call; on failure the amount waits in `pendingPayout` for `claimPayout`.
+    /// @dev Push (native: a 10k-gas call; ERC20: a non-reverting transfer); on failure the amount waits in
+    ///      `pendingPayout` for `claimPayout`.
     function _payOut(address to, uint256 amount) internal {
-        (bool ok,) = to.call{value: amount, gas: PUSH_GAS}("");
+        address q = quoteToken;
+        bool ok;
+        if (q == address(0)) (ok,) = to.call{value: amount, gas: PUSH_GAS}("");
+        else ok = IERC20(q).trySafeTransfer(to, amount);
         if (!ok) {
             pendingPayout[to] += amount;
             emit PayoutPending(to, amount);
@@ -572,14 +603,22 @@ contract Exchange is Ownable, ReentrancyGuard {
         }
     }
 
-    /// @notice Graduating -> Graduated: hand `raised` to the rail, which launches the memecoin and must give the
-    ///         Exchange exactly LOSER_SUPPLY (via `receiveLoserTokens`) before returning. Permissionless.
+    /// @notice Graduating -> Graduated: hand `raised` of the quote token to the rail (native: as value; ERC20:
+    ///         transferred before the call), which launches the memecoin and must give the Exchange exactly
+    ///         LOSER_SUPPLY (via `receiveLoserTokens`) before returning. Permissionless.
     function graduate(uint256 id) external nonReentrant {
         LaunchView storage l = _launch(id);
         if (l.status != GRADUATING) revert NotGraduating();
         l.status = GRADUATED;
         uint256 raised = l.raised;
-        (address token,) = ILaunchRail(l.rail).launch{value: raised}(id);
+        address q = quoteToken;
+        address token;
+        if (q == address(0)) {
+            (token,) = ILaunchRail(l.rail).launch{value: raised}(id, raised);
+        } else {
+            IERC20(q).safeTransfer(l.rail, raised);
+            (token,) = ILaunchRail(l.rail).launch(id, raised);
+        }
         if (!loserTokensIn[id]) revert LoserTokensMissing();
         if (token != l.token) revert BadToken();
         emit Graduated(id, token, raised);
@@ -677,8 +716,9 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit BatchSubmitted(id, b.ts, b.fills.length);
     }
 
-    /// @dev One fill at the maker's price. Transfer: shares one way, BNB the other. Mint: both buy opposite outcomes,
-    ///      a new pair backed by exactly 1 BNB. Merge: both sell opposite outcomes, a pair is burned and its 1 BNB paid.
+    /// @dev One fill at the maker's price. Transfer: shares one way, quote the other. Mint: both buy opposite
+    ///      outcomes, a new pair backed by exactly 1 quote unit (1e18). Merge: both sell opposite outcomes, a pair is
+    ///      burned and its 1 quote unit paid.
     function _applyFill(
         Eip712.Order calldata t,
         Eip712.Order calldata m,

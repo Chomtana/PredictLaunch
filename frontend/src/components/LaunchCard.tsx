@@ -1,7 +1,7 @@
 import { big, LaunchStatus, n, OutcomeCode, poolOf, progressOf, type LaunchSummary } from '../lib/api.ts'
 import { asset, duration, settleLabel } from '../lib/format.ts'
 import { fmtBnb, fmtPrice, usd } from '../lib/units.ts'
-import { useApp } from '../state.tsx'
+import { useApp, useQuote } from '../state.tsx'
 import { AssetBadge, CoinAvatar, ProgressBar } from './ui.tsx'
 
 export type Phase = 'live' | 'settling' | 'graduating' | 'graduated' | 'failed' | 'void'
@@ -38,7 +38,8 @@ export function questionShort(l: LaunchSummary, feedSym: string) {
 }
 
 export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
-  const { feedSymbol, bnbUsd, priceOf } = useApp()
+  const { feedSymbol, quoteUsd, priceOf } = useApp()
+  const { symbol: q } = useQuote()
   const sym = feedSymbol(l.feed)
   const phase = phaseOf(l, now)
   const pool = poolOf(l)
@@ -95,9 +96,9 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
       <div className="lc-progress">
         <div className="lc-progress-top">
           <span>
-            <b className="mono">{fmtBnb(pool, 3)}</b> <span className="muted">/ {fmtBnb(l.target, 2)} BNB</span>
+            <b className="mono">{fmtBnb(pool, 3)}</b> <span className="muted">/ {fmtBnb(l.target, 2)} {q}</span>
           </span>
-          <span className="muted small">{usd(pool, bnbUsd)}</span>
+          <span className="muted small">{usd(pool, quoteUsd)}</span>
         </div>
         <ProgressBar value={prog} glow={phase === 'graduated'} />
         <div className="lc-foot">

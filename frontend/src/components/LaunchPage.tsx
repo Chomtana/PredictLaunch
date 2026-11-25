@@ -15,7 +15,7 @@ import { Spinner, useNow } from './ui.tsx'
 
 export function LaunchPage({ id }: { id: number }) {
   const app = useApp()
-  const { config, live, watchLaunch, user, wallet, keyState, bnbUsd, priceOf, feedSymbol } = app
+  const { config, live, watchLaunch, user, wallet, keyState, quoteUsd, priceOf, feedSymbol } = app
   const now = useNow(1000)
   const [detail, setDetail] = useState<LaunchDetail | null>(null)
   const [book, setBook] = useState<Book | null>(null)
@@ -111,7 +111,7 @@ export function LaunchPage({ id }: { id: number }) {
           />
           {settled && <OutcomePanel l={l} phase={phase} mine={mine} />}
           <PriceChart feed={l.feed} strike={strike} settleTime={settleTime} />
-          <LaunchProgress l={l} bnbUsd={bnbUsd} position={position} mine={mine} />
+          <LaunchProgress l={l} quoteUsd={quoteUsd} position={position} mine={mine} />
           <Positions position={position} cutBps={n(l.cutBps)} mid={midUp(b)} orders={orders} trades={tr} onCancel={app.cancelOrder} />
         </div>
         <div className="launch-side">

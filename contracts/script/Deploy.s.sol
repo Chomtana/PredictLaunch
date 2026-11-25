@@ -10,7 +10,10 @@ import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol"
 /// ownership to OWNER, and writes ../.dev/deploy.json {exchange, factory, chainId, owner, operator}.
 ///
 ///   forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <deployer>
-///   env: OWNER (default: deployer), OPERATOR (default: deployer)
+///   env: OWNER (default: deployer), OPERATOR (default: deployer),
+///        QUOTE_TOKEN (default: address(0) = native BNB; testnet: Flap's faucet USDT
+///        0x190C989D5665a0e404B444b53CAE9AbCfb600157), MIN_TARGET (wei, default: 2.15e18 native,
+///        1500e18 for an ERC20 quote)
 ///
 /// Not done here (cheatcodes do not broadcast); on an anvil fork run script/fork-setup.sh afterwards, which
 ///   1. authorizes the Exchange on every Atlas feed (feeds only serve EOAs and authorized callers), and
@@ -34,7 +37,12 @@ contract Deploy is Script {
         address owner = vm.envOr("OWNER", deployer);
         address operator = vm.envOr("OPERATOR", deployer);
 
-        Exchange ex = new Exchange(deployer);
+        address quote = vm.envOr("QUOTE_TOKEN", address(0));
+        Exchange ex = new Exchange(deployer, quote);
+        // The Portal refuses a pool quote under ~$1500 (2.15 BNB native; 1500e18 for an 18-decimal USD token), so a
+        // lower target could register and then never graduate.
+        uint256 minTarget = vm.envOr("MIN_TARGET", quote == address(0) ? uint256(0) : 1500 ether);
+        if (minTarget != 0) ex.setMinTarget(minTarget);
         BilauncherLauncherFactory factory = new BilauncherLauncherFactory(PORTAL, GUARDIAN, address(ex));
         ex.setFactory(address(factory));
         for (uint256 i; i < feeds.length; ++i) {
@@ -48,11 +56,13 @@ contract Deploy is Script {
         console.log("exchange", address(ex));
         console.log("factory ", address(factory));
         console.log("feeds   ", feeds.length);
+        console.log("quote   ", quote);
 
         string memory k = "deploy";
         vm.serializeAddress(k, "exchange", address(ex));
         vm.serializeAddress(k, "factory", address(factory));
         vm.serializeUint(k, "chainId", block.chainid);
+        vm.serializeAddress(k, "quoteToken", quote);
         vm.serializeAddress(k, "owner", owner);
         string memory out = vm.serializeAddress(k, "operator", operator);
         string memory dir = string.concat(vm.projectRoot(), "/../.dev");

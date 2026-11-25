@@ -25,6 +25,10 @@ pub struct Inner {
     pub calls: Vec<String>,
     pub feeds: HashMap<Address, (U256, u64)>,
     pub balances: HashMap<Address, U256>,
+    /// `info().quote_token` (default native).
+    pub quote_token: Address,
+    /// Quote-token mints by the dev faucet.
+    pub quote_mints: HashMap<Address, U256>,
 }
 
 #[derive(Default)]
@@ -121,11 +125,19 @@ impl Chain for FakeChain {
         self.call(format!("setBalance {who}"));
         Ok(())
     }
+    async fn mint_quote(&self, _quote: Address, who: Address, amount: U256) -> anyhow::Result<()> {
+        *self.0.lock().unwrap().quote_mints.entry(who).or_default() += amount;
+        self.call(format!("mintQuote {who}"));
+        Ok(())
+    }
     async fn info(&self) -> anyhow::Result<ChainInfo> {
+        let quote_token = self.0.lock().unwrap().quote_token;
         Ok(ChainInfo {
             chain_id: 97,
             salt_lock_fee: U256::from(5_000_000_000_000_000u64),
             min_target: U256::from(2_150_000_000_000_000_000u64),
+            quote_token,
+            quote_symbol: if quote_token.is_zero() { "BNB" } else { "USD" }.into(),
         })
     }
 }

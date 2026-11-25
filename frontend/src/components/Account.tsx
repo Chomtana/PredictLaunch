@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { shortAddr } from '../lib/format.ts'
 import { fmtBnb, parseBnb, usd } from '../lib/units.ts'
+import { isNative } from '../lib/chain.ts'
 import { DEV_ACCOUNTS } from '../lib/wallet.ts'
 import { useApp } from '../state.tsx'
 
@@ -64,7 +65,8 @@ function ConnectList() {
 }
 
 function Connected() {
-  const { wallet, user, walletBalance, bnbUsd, deposit, withdraw, faucet, keyState, enableTrading, forgetKey, disconnect, launches } = useApp()
+  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, enableTrading, forgetKey, disconnect, launches } = useApp()
+  const native = isNative(quoteToken)
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
   const [amt, setAmt] = useState('')
   const [busy, setBusy] = useState(false)
@@ -101,11 +103,11 @@ function Connected() {
 
       <div className="bal-card">
         <div className="muted small">Trading balance</div>
-        <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} BNB</div>
+        <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} {q}</div>
         <div className="muted small">
-          {bal != null && usd(bal, bnbUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
+          {bal != null && usd(bal, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
         </div>
-        <div className="muted small">Wallet: {walletBalance != null ? fmtBnb(walletBalance, 4) : '…'} BNB</div>
+        <div className="muted small">Wallet: {walletBalance != null ? fmtBnb(walletBalance, 4) : '…'} {q}</div>
       </div>
 
       <div className="seg full">
@@ -117,16 +119,16 @@ function Connected() {
         </button>
       </div>
       <div className="amount-row">
-        <input aria-label="Amount (BNB)" inputMode="decimal" placeholder="0.0" value={amt} onChange={(e) => setAmt(e.target.value)} />
-        <span className="unit">BNB</span>
+        <input aria-label={`Amount (${q})`} inputMode="decimal" placeholder="0.0" value={amt} onChange={(e) => setAmt(e.target.value)} />
+        <span className="unit">{q}</span>
         {max != null && max > 0n && (
-          <button className="chip" onClick={() => setAmt(fmtBnb(tab === 'deposit' && max > 10n ** 16n ? max - 10n ** 16n : max, 4).replace(/,/g, ''))}>
+          <button className="chip" onClick={() => setAmt(fmtBnb(native && tab === 'deposit' && max > 10n ** 16n ? max - 10n ** 16n : max, 4).replace(/,/g, ''))}>
             Max
           </button>
         )}
       </div>
       <button className="btn primary wide" disabled={!ok || busy} onClick={go}>
-        {tab === 'deposit' ? 'Deposit BNB' : 'Request withdrawal'}
+        {tab === 'deposit' ? `Deposit ${q}` : 'Request withdrawal'}
       </button>
       {tab === 'withdraw' && <div className="muted small">Paid in the next batch (a few seconds). Resting orders are cancelled if needed.</div>}
       {user && user.pendingWithdrawals.length > 0 && (
@@ -135,7 +137,7 @@ function Connected() {
         </div>
       )}
       <button className="btn ghost wide" onClick={faucet}>
-        Get 1,000 test BNB (faucet)
+        {native ? 'Get 1,000 test BNB (faucet)' : `Get 10,000 test ${q} (faucet)`}
       </button>
 
       <div className="section-label">Trading session</div>

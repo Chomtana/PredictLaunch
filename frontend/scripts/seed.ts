@@ -4,8 +4,9 @@
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
 // Creates 2 launches through Portal.newLauncher + our factory (anvil #3 is the creator):
-//   BTCB: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB
-//   BNB:  strike = current price + 1%, settles in 30 min, cut 30%, target 3 BNB
+//   BTCB: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB (2,150 USDT)
+//   BNB:  strike = current price + 1%, settles in 30 min, cut 30%, target 3 BNB (3,000 USDT)
+// With a USDT quote (deploy.json quoteToken) every amount is x1000 (S.K) and bots mint their USDT.
 // Funds 3 bots (anvil #5 maker, #6 and #7 takers), deposits, authorizes one trading key each, and
 // seeds the books. --live keeps going: the maker re-quotes both sides around
 // pUp = Φ((price − strike) / (σ·price·sqrt(timeLeft))) every few seconds and the takers cross it, so
@@ -23,7 +24,8 @@ const S = setup(RPC, API, arg('deploy', '../.dev/deploy.json')!)
 
 const CREATOR = privateKeyToAccount(ANVIL_KEYS[3])
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
-const shares = (x: number) => (BigInt(Math.round(x * 100)) * UNIT) // x shares, 0.01 granularity
+const shares = (x: number) => (BigInt(Math.round(x * S.K * 100)) * UNIT) // x (x K) shares, 0.01 granularity
+const K = BigInt(S.K)
 
 interface Mkt {
   id: bigint
@@ -40,8 +42,8 @@ async function createPair(): Promise<Mkt[]> {
   const btc = await S.feedPrice(FEEDS.BTCB)
   const bnb = await S.feedPrice(FEEDS.BNB)
   const defs = [
-    { name: 'Bitcoin Believer', symbol: 'BELIEVE', feed: FEEDS.BTCB, strike: btc, settleTime: now + 15n * 60n, cutBps: 1000, target: parseEther('2.15') },
-    { name: 'BNB Moon', symbol: 'BMOON', feed: FEEDS.BNB, strike: (bnb * 101n) / 100n, settleTime: now + 30n * 60n, cutBps: 3000, target: parseEther('3') },
+    { name: 'Bitcoin Believer', symbol: 'BELIEVE', feed: FEEDS.BTCB, strike: btc, settleTime: now + 15n * 60n, cutBps: 1000, target: parseEther('2.15') * K },
+    { name: 'BNB Moon', symbol: 'BMOON', feed: FEEDS.BNB, strike: (bnb * 101n) / 100n, settleTime: now + 30n * 60n, cutBps: 3000, target: parseEther('3') * K },
   ]
   const out: Mkt[] = []
   for (const d of defs) {
@@ -82,7 +84,7 @@ async function main() {
   let mkts = await createPair()
   console.log(`seed: warmed the fork for graduation in ${await S.warmGraduation(mkts[0].rail, mkts[0].id, mkts[0].target)} ms`)
   console.log('seed: funding bots #5 #6 #7 and authorizing trading keys')
-  const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(privateKeyToAccount(ANVIL_KEYS[i]), 300n * E18)))
+  const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(privateKeyToAccount(ANVIL_KEYS[i]), 300n * E18 * K)))
   const takers = [t1, t2]
 
   for (const m of mkts) await quote(maker, m, await fair(m))
@@ -107,7 +109,7 @@ async function main() {
         continue
       }
       tick++
-      if (tick % 10 === 0) for (const b of [maker, ...takers]) if (await S.topUp(b)) console.log(`seed: topped up ${b.owner}`)
+      if (tick % 10 === 0) for (const b of [maker, ...takers]) if (await S.topUp(b, 100n * E18 * K, 200n * E18 * K)) console.log(`seed: topped up ${b.owner}`)
       for (const m of open) {
         const f = await fair(m)
         if (tick % 3 === 0) await quote(maker, m, f)
@@ -116,7 +118,7 @@ async function main() {
       if (tick % 10 === 0) {
         const ls = await S.get<{ id: number; symbol: string; pairs: string; projectedRaised: string; target: string; upPrice: number | null }[]>('/api/launches')
         for (const l of ls.filter((l) => open.some((m) => Number(m.id) === Number(l.id))))
-          console.log(`seed: #${l.id} ${l.symbol} pairs ${Number(BigInt(l.pairs)) / 1e18} projected ${Number(BigInt(l.projectedRaised)) / 1e18}/${Number(BigInt(l.target)) / 1e18} BNB up ${l.upPrice}`)
+          console.log(`seed: #${l.id} ${l.symbol} pairs ${Number(BigInt(l.pairs)) / 1e18} projected ${Number(BigInt(l.projectedRaised)) / 1e18}/${Number(BigInt(l.target)) / 1e18} ${S.Q} up ${l.upPrice}`)
       }
     } catch (e) {
       console.log('seed: tick failed:', (e as Error).message.split('\n')[0])

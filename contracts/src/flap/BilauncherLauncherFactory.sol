@@ -105,7 +105,7 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
             name: "cutBps", fieldType: "uint16", description: "Cut of each winning share: 1000-3000 step 500", decimals: 0
         });
         f[7] = FieldDescriptor({
-            name: "target", fieldType: "uint256", description: "BNB raise needed to graduate (>= minTarget)", decimals: 18
+            name: "target", fieldType: "uint256", description: "Raise (in the quote token) needed to graduate (>= minTarget)", decimals: 18
         });
         f[8] = FieldDescriptor({
             name: "salt", fieldType: "bytes32", description: "CREATE2 salt; the token address must end in 0x7777", decimals: 0

@@ -200,6 +200,7 @@ fn settings() -> Settings {
         dev_faucet: false,
         start_block: 0,
         price_api: None,
+        quote_symbol: None,
     }
 }
 

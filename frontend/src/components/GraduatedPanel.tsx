@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { fmtBnb, fmtShares, num18, POOL_TOKENS } from '../lib/units.ts'
 import { Spinner } from './ui.tsx'
+import { useQuote } from '../state.tsx'
 
-/** Pool opening price in BNB per token: raised / 500M. */
+/** Pool opening price in the quote token per token: raised / 500M. */
 export const poolPrice = (raised: bigint) => num18(raised) / num18(POOL_TOKENS)
 
 export function GraduatedPanel({
@@ -23,6 +24,7 @@ export function GraduatedPanel({
   onClaim: () => void
   graduating?: boolean
 }) {
+  const { symbol: q } = useQuote()
   const [copied, setCopied] = useState(false)
   const amount = BigInt(claimable || '0')
   if (graduating) {
@@ -32,7 +34,7 @@ export function GraduatedPanel({
           <Spinner size={18} /> Launching on Flap…
         </h2>
         <div className="muted">
-          The pool hit its target. ${symbol} is being minted through the Flap Portal: {fmtBnb(raised, 3)} BNB and 500M tokens seed the PancakeSwap pool.
+          The pool hit its target. ${symbol} is being minted through the Flap Portal: {fmtBnb(raised, 3)} {q} and 500M tokens seed the PancakeSwap pool.
         </div>
       </div>
     )
@@ -51,7 +53,7 @@ export function GraduatedPanel({
     <div className="panel state-panel graduated">
       <h2>🎓 ${symbol} graduated</h2>
       <div className="muted">
-        The prediction is over. {fmtBnb(raised, 3)} BNB from winners' cut and 500M ${symbol} now form the PancakeSwap pool. Losers share the other 500M.
+        The prediction is over. {fmtBnb(raised, 3)} {q} from winners' cut and 500M ${symbol} now form the PancakeSwap pool. Losers share the other 500M.
       </div>
       {token && (
         <div className="addr-row">
@@ -64,11 +66,11 @@ export function GraduatedPanel({
       <div className="stat-grid">
         <div className="stat">
           <span className="k">Pool price</span>
-          <span className="v mono">{poolPrice(raised).toExponential(2)} BNB</span>
+          <span className="v mono">{poolPrice(raised).toExponential(2)} {q}</span>
         </div>
         <div className="stat">
           <span className="k">Pool liquidity</span>
-          <span className="v mono">{fmtBnb(raised, 3)} BNB</span>
+          <span className="v mono">{fmtBnb(raised, 3)} {q}</span>
         </div>
         <div className="stat">
           <span className="k">Your loser shares</span>

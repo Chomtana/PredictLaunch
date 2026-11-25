@@ -2,6 +2,7 @@ import type { Hex } from 'viem'
 import { n, type OrderView, type Trade } from '../lib/api.ts'
 import { clock } from '../lib/format.ts'
 import { cost, fmtBnb, fmtShares, payout } from '../lib/units.ts'
+import { useQuote } from '../state.tsx'
 
 /** The user's position in this launch, their open orders, and recent trades. */
 export function Positions({
@@ -19,6 +20,7 @@ export function Positions({
   trades: Trade[]
   onCancel: (h: Hex) => void
 }) {
+  const { symbol: q } = useQuote()
   const rows = position
     ? ([
         ['Up', position.up, mid],
@@ -47,8 +49,8 @@ export function Positions({
                   <b>{o}</b>
                 </td>
                 <td className="r mono">{fmtShares(a)}</td>
-                <td className="r mono">{p != null ? `${fmtBnb(cost(a, p), 3)} BNB` : '—'}</td>
-                <td className="r mono up">{fmtBnb(payout(a, cutBps), 3)} BNB</td>
+                <td className="r mono">{p != null ? `${fmtBnb(cost(a, p), 3)} ${q}` : '—'}</td>
+                <td className="r mono up">{fmtBnb(payout(a, cutBps), 3)} {q}</td>
               </tr>
             ))}
           </tbody>

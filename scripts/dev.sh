@@ -6,6 +6,7 @@
 #   scripts/dev.sh --no-live       ... seed once, but no live market-maker loop afterwards
 #   scripts/dev.sh --no-frontend   ... without the Vite dev server (e.g. for API work or e2e)
 #   BATCH_MS=3000 scripts/dev.sh   batch every 3 s (default 2 s)
+#   QUOTE=bnb scripts/dev.sh       native BNB collateral (default: Flap's testnet faucet USDT)
 #
 # Needs BSC_TESTNET_RPC_URL in .env at the repo root (never printed). The fork is chain 97, like the
 # real testnet: keep it in a SEPARATE MetaMask network (http://127.0.0.1:8545) and never mix the two.
@@ -19,6 +20,13 @@ RPC_PORT="${RPC_PORT:-8545}"
 SEQ_PORT="${SEQ_PORT:-8787}"
 WEB_PORT="${WEB_PORT:-5173}"
 BATCH_MS="${BATCH_MS:-2000}"
+# Exchange collateral: Flap's testnet faucet USDT (on-chain "USD", public mint) or native BNB.
+FLAP_USDT=0x190C989D5665a0e404B444b53CAE9AbCfb600157
+case "${QUOTE:-usdt}" in
+  usdt) QUOTE_TOKEN="$FLAP_USDT"; QUOTE_SYMBOL=USDT ;;
+  bnb) QUOTE_TOKEN=0x0000000000000000000000000000000000000000; QUOTE_SYMBOL=BNB ;;
+  *) echo "QUOTE must be usdt or bnb"; exit 1 ;;
+esac
 RPC="http://127.0.0.1:$RPC_PORT"
 API="http://127.0.0.1:$SEQ_PORT"
 SEED=1
@@ -29,7 +37,7 @@ for a in "$@"; do
     --no-seed) SEED=0 ;;
     --no-live) LIVE=0 ;;
     --no-frontend) FRONTEND=0 ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "unknown option $a"; exit 1 ;;
   esac
 done
@@ -86,8 +94,8 @@ for _ in $(seq 120); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break;
 [ "$(cast chain-id --rpc-url "$RPC" 2>/dev/null)" = 97 ] || fail "anvil did not start" "$DEV/anvil.log"
 START_BLOCK="$(cast block-number --rpc-url "$RPC")"
 
-step "deploying Exchange + BilauncherLauncherFactory (owner #0, operator #9)"
-(cd "$ROOT/contracts" && OWNER="$OWNER" OPERATOR="$OP" forge script script/Deploy.s.sol:Deploy \
+step "deploying Exchange + BilauncherLauncherFactory (owner #0, operator #9, quote $QUOTE_SYMBOL)"
+(cd "$ROOT/contracts" && OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$QUOTE_TOKEN" forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$RPC" --broadcast --private-key "$DEPLOYER_KEY" 2>&1 | scrub >"$DEV/deploy.log") || fail "deploy" "$DEV/deploy.log"
 EXCHANGE="$(jq -r .exchange "$DEV/deploy.json")"
 FACTORY="$(jq -r .factory "$DEV/deploy.json")"
@@ -106,6 +114,7 @@ grep -q 'feed-relay: ready' "$DEV/feed-relay.log" || fail "feed relay" "$DEV/fee
 step "starting sequencer on $API (batch every ${BATCH_MS} ms)"
 RUST_LOG="${RUST_LOG:-info}" "$SEQ_BIN" --rpc "$RPC" --exchange "$EXCHANGE" --factory "$FACTORY" \
   --operator-key "$OP_KEY" --port "$SEQ_PORT" --batch-ms "$BATCH_MS" --dev-faucet --start-block "$START_BLOCK" \
+  --quote-symbol "$QUOTE_SYMBOL" \
   >"$DEV/sequencer.log" 2>&1 &
 SEQ_PID=$!
 PIDS+=($SEQ_PID)
@@ -145,7 +154,8 @@ $([ $FRONTEND = 1 ] && echo "    frontend    http://localhost:$WEB_PORT")
   and never send real testnet funds to the dev keys below (PUBLIC anvil keys, LOCAL ONLY):
     #0  0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     #1  0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
-  Or use the in-app dev wallet; the faucet button gives any address 1000 fork BNB.
+  Or use the in-app dev wallet; the faucet button gives any address 1000 fork BNB (gas) and, with the
+  USDT quote, 10,000 USDT.
 
   Ctrl-C stops everything.
 EOF

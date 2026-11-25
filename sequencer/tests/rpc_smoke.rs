@@ -43,6 +43,7 @@ async fn rpc_chain_round_trip() {
             dev_faucet: true,
             start_block: start,
             price_api: None,
+            quote_symbol: None,
         },
     )
     .await

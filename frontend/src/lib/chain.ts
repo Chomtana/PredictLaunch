@@ -15,7 +15,8 @@ import {
 } from 'viem'
 
 export const exchangeAbi = parseAbi([
-  'function deposit() payable',
+  'function deposit(uint256 amount) payable',
+  'function quoteToken() view returns (address)',
   'function requestWithdraw(uint256 amount) returns (uint64 idx)',
   'function forceWithdraw(uint64 idx)',
   'function claimPayout()',
@@ -29,6 +30,15 @@ export const exchangeAbi = parseAbi([
   'function withdrawQueueLength() view returns (uint64)',
   'function withdrawProcessed() view returns (uint64)',
 ])
+
+export const erc20Abi = parseAbi([
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function balanceOf(address who) view returns (uint256)',
+])
+
+export const NATIVE: Address = '0x0000000000000000000000000000000000000000'
+export const isNative = (quote: Address | null | undefined) => !quote || /^0x0{40}$/i.test(quote)
 
 export const portalAbi = parseAbi([
   'function newLauncher(address launcherFactory, bytes data) payable returns (address launcher)',
@@ -90,8 +100,25 @@ export function createLaunch(
   })
 }
 
-export const deposit = (wallet: WalletClient, account: Who, exchange: Address, amount: bigint) =>
-  wallet.writeContract({ address: exchange, abi: exchangeAbi, functionName: 'deposit', value: amount, account, chain: wallet.chain })
+/** Exchange.deposit(amount). Native quote: `amount` as value. ERC20 quote: approve first when the allowance is short
+ *  (waiting for that receipt), then deposit with no value. */
+export async function deposit(wallet: WalletClient, pc: PublicClient, account: Who, exchange: Address, quote: Address, amount: bigint): Promise<Hex> {
+  if (isNative(quote)) {
+    return wallet.writeContract({ address: exchange, abi: exchangeAbi, functionName: 'deposit', args: [amount], value: amount, account, chain: wallet.chain })
+  }
+  const owner = typeof account === 'string' ? account : account.address
+  const allowance = await pc.readContract({ address: quote, abi: erc20Abi, functionName: 'allowance', args: [owner, exchange] })
+  if (allowance < amount) {
+    const h = await wallet.writeContract({ address: quote, abi: erc20Abi, functionName: 'approve', args: [exchange, amount], account, chain: wallet.chain })
+    const rc = await pc.waitForTransactionReceipt({ hash: h })
+    if (rc.status !== 'success') throw new Error('Approve reverted')
+  }
+  return wallet.writeContract({ address: exchange, abi: exchangeAbi, functionName: 'deposit', args: [amount], account, chain: wallet.chain })
+}
+
+/** Wallet balance of the quote token (native balance for a native quote). */
+export const quoteBalance = (pc: PublicClient, quote: Address, who: Address) =>
+  isNative(quote) ? pc.getBalance({ address: who }) : pc.readContract({ address: quote, abi: erc20Abi, functionName: 'balanceOf', args: [who] })
 
 export const requestWithdraw = (wallet: WalletClient, account: Who, exchange: Address, amount: bigint) =>
   wallet.writeContract({ address: exchange, abi: exchangeAbi, functionName: 'requestWithdraw', args: [amount], account, chain: wallet.chain })

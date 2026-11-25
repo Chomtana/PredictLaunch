@@ -40,13 +40,15 @@ const PRESETS: [string, number][] = [
 interface FormProps {
   config: Config
   priceOf: (feed: Address) => bigint | null
-  bnbUsd: bigint | null
+  /** USD price of the quote token (BNB/USD, or 1 for a USD token). */
+  quoteUsd: bigint | null
   connected: boolean
   onSubmit: (cfg: LaunchDraft) => Promise<unknown> | void
   busy?: string | null
 }
 
-export function CreateLaunchForm({ config, priceOf, bnbUsd, connected, onSubmit, busy }: FormProps) {
+export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy }: FormProps) {
+  const q = config.quoteSymbol ?? 'BNB'
   const minTarget = BigInt(config.minTarget)
   const [name, setName] = useState('')
   const [symbol, setSymbol] = useState('')
@@ -90,9 +92,9 @@ export function CreateLaunchForm({ config, priceOf, bnbUsd, connected, onSubmit,
     if (!Number.isFinite(settleSec)) e.settle = 'Pick a date and time'
     else if (dur < config.minDuration) e.settle = `At least ${duration(config.minDuration)} from now`
     else if (dur > config.maxDuration) e.settle = `At most ${duration(config.maxDuration)} from now`
-    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtBnb(minTarget, 2)} BNB (Flap's pool floor)`
+    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtBnb(minTarget, 2)} ${q} (Flap's pool floor)`
     return e
-  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget])
+  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q])
   const valid = Object.keys(errors).length === 0
 
   const delta = current && strikeWei ? (num18(strikeWei) / num18(current) - 1) * 100 : null
@@ -214,10 +216,10 @@ export function CreateLaunchForm({ config, priceOf, bnbUsd, connected, onSubmit,
           <span className="field-hint">Winners are paid {(10000 - cut) / 100}¢ per share; the rest goes to the pool. Fixed for the launch.</span>
         </div>
         <Field
-          label="Target (BNB)"
+          label={`Target (${q})`}
           id="cl-target"
           err={errors.target}
-          hint={!errors.target && targetWei ? `≈ ${usd(targetWei, bnbUsd) || '…'} · pool needed to graduate` : undefined}
+          hint={!errors.target && targetWei ? `≈ ${usd(targetWei, quoteUsd) || '…'} · pool needed to graduate` : undefined}
         >
           <input id="cl-target" inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value)} />
         </Field>
@@ -262,7 +264,7 @@ export function CreateLaunchForm({ config, priceOf, bnbUsd, connected, onSubmit,
             </div>
             <div>
               <span className="muted">Graduates at</span>
-              <b>{targetWei ? fmtBnb(targetWei, 2) : '…'} BNB</b>
+              <b>{targetWei ? fmtBnb(targetWei, 2) : '…'} {q}</b>
             </div>
             <div>
               <span className="muted">Open pairs needed</span>
@@ -272,7 +274,7 @@ export function CreateLaunchForm({ config, priceOf, bnbUsd, connected, onSubmit,
         </div>
         <ol className="how">
           <li>
-            <b>Trade.</b> Up and Down shares trade 1¢–99¢ until settlement. A pair (1 Up + 1 Down) is backed by 1 BNB.
+            <b>Trade.</b> Up and Down shares trade 1¢–99¢ until settlement. A pair (1 Up + 1 Down) is backed by 1 {q}.
           </li>
           <li>
             <b>Settle.</b> At settlement the oracle decides. Winners redeem {(10000 - cut) / 100}¢; the {cut / 100}% cut goes to the pool.
@@ -303,7 +305,7 @@ function Field({ label, id, err, hint, children }: { label: string; id: string; 
 
 /** The #/create page, wired to app state. */
 export function CreateLaunch() {
-  const { config, configError, priceOf, bnbUsd, wallet, createLaunch, setAccountOpen } = useApp()
+  const { config, configError, priceOf, quoteUsd, wallet, createLaunch, setAccountOpen } = useApp()
   const [busy, setBusy] = useState<string | null>(null)
   if (!config) {
     return (
@@ -327,7 +329,7 @@ export function CreateLaunch() {
       <CreateLaunchForm
         config={config}
         priceOf={priceOf}
-        bnbUsd={bnbUsd}
+        quoteUsd={quoteUsd}
         connected={!!wallet}
         busy={busy}
         onSubmit={async (cfg) => {

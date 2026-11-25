@@ -11,7 +11,8 @@ contract MockToken is ERC20 {
     }
 }
 
-/// An ILaunchRail that keeps the BNB, holds a pre-minted 1B token and hands 500M to the Exchange.
+/// An ILaunchRail that keeps the quote (native value or the ERC20 the Exchange sent first), holds a pre-minted 1B
+/// token and hands 500M to the Exchange.
 contract MockRail is ILaunchRail {
     Exchange public immutable ex;
     MockToken public immutable token;
@@ -27,8 +28,11 @@ contract MockRail is ILaunchRail {
         skipReceive = s;
     }
 
-    function launch(uint256 launchId) external payable returns (address, address) {
+    uint256 public quoteArg;
+
+    function launch(uint256 launchId, uint256 quoteAmount) external payable returns (address, address) {
         received += msg.value;
+        quoteArg = quoteAmount;
         if (!skipReceive) {
             token.approve(address(ex), 500_000_000e18);
             ex.receiveLoserTokens(launchId, address(token), 500_000_000e18);

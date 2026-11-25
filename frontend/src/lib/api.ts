@@ -27,6 +27,10 @@ export interface Config {
   minDuration: number
   maxDuration: number
   batchMs: number
+  /** Exchange collateral: the zero address = native BNB (older sequencers omit it). */
+  quoteToken?: Address
+  /** Its display symbol, e.g. "BNB" or "USDT". */
+  quoteSymbol?: string
   /** Optional: true when POST /api/faucet is enabled (--dev-faucet). */
   faucet?: boolean
 }

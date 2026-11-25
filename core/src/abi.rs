@@ -66,7 +66,9 @@ alloy_sol_types::sol! {
         function setFeed(address feed, bool enabled) external;
         function setMinTarget(uint256 bnb) external;
 
-        function deposit() external payable;
+        function deposit(uint256 amount) external payable;
+        /// Collateral token: address(0) = native BNB.
+        function quoteToken() external view returns (address);
         function requestWithdraw(uint256 amount) external returns (uint64 idx);
         function forceWithdraw(uint64 idx) external;
         function claimPayout() external;
@@ -129,6 +131,12 @@ alloy_sol_types::sol! {
 
     interface IPortal {
         function SALT_LOCK_FEE() external view returns (uint256);
+    }
+
+    /// The quote token's metadata, plus the permissionless `mint` of test tokens (Flap's faucet USDT).
+    interface IQuoteToken {
+        function symbol() external view returns (string);
+        function mint(address to, uint256 amount) external;
     }
 }
 

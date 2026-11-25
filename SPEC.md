@@ -19,13 +19,18 @@ scripts/     dev.sh (fork demo), e2e.sh
 
 - Chain: anvil fork of BSC testnet, `chainId 97`, RPC from `.env` `BSC_TESTNET_RPC_URL`. Fork tests
   `vm.createSelectFork(vm.envString("BSC_TESTNET_RPC_URL"))` and **skip** when it's unset.
-- Collateral: **native BNB only**. 1 Up share + 1 Down share are always backed by exactly 1 BNB.
+- Collateral: the Exchange's `quoteToken`, fixed at deploy: `address(0)` = native BNB, otherwise an
+  18-decimal ERC20 (the dev stack uses Flap's testnet faucet USDT `0x190C989D5665a0e404B444b53CAE9AbCfb600157`,
+  on-chain symbol "USD", public `mint`). 1 Up share + 1 Down share are always backed by exactly 1 quote unit
+  (1e18). Below, "BNB" amounts mean quote units.
 - Prices: whole hundredths (`uint8` 1..99), in the order's own outcome terms.
 - Share amounts: 18-decimal, **must be a multiple of `SHARE_UNIT = 1e16`**. This makes every cost
   (`amount × price / 100`), payout (`amount × (10000 − cutBps) / 10000`) and void payout
   (`amount / 2`) exact, with no rounding anywhere. Anything else is rejected.
 - Cut (bps): one of `1000, 1500, 2000, 2500, 3000`, default 1000, fixed per launch.
-- `minTarget`: admin-configurable, default `2.15 ether` (BNB).
+- `minTarget`: admin-configurable, default `2.15 ether`. The Portal refuses a pool quote under ~$1500
+  (2.15 BNB native; `1500e18` for the USD token: error `0xa32ef056(provided, min)`), so the deploy script
+  sets `1500 ether` for an ERC20 quote.
 - Memecoin: `totalSupply = 1_000_000_000e18`, `poolToken = 500_000_000e18`, losers'
   `LOSER_SUPPLY = 500_000_000e18`; tax 100 bps buy and sell (the Portal rejects < 100), `taxDuration
   30 days`, `antiFarmerDuration 1 days`, one DEFLATION slot of 10000 bps; quote `address(0)`;
@@ -81,12 +86,14 @@ constructor(address owner);
 function setFactory(address factory) external;                       // the only address allowed to registerLaunch
 function setOperator(address op, bool on) external;
 function setFeed(address feed, bool enabled) external;
-function setMinTarget(uint256 bnb) external;                         // default 2.15 ether
+constructor(address owner, address quoteToken);                      // quoteToken: 0 = native; else 18 decimals
+function quoteToken() external view returns (address);
+function setMinTarget(uint256 amount) external;                      // default 2.15 ether
 function setFallbackFeed(address atlasFeed, address chainlinkFeed) external; // Chainlink AggregatorV3 fallback; 0 clears
 function fallbackFeed(address atlasFeed) external view returns (address);
 
 // funds
-function deposit() external payable;
+function deposit(uint256 amount) external payable;                   // native: msg.value == amount; ERC20: approve, no value
 function requestWithdraw(uint256 amount) external returns (uint64 idx);
 function forceWithdraw(uint64 idx) external;                         // after FORCE_DELAY, if unprocessed
 function claimPayout() external;                                     // pulls `pendingPayout` when a push failed
@@ -107,7 +114,7 @@ function registerLaunch(address rail, address creator, address token, LaunchConf
 function snapshot(uint256 launchId) external;                        // settlement price, window [settleTime, settleTime+GRACE]
 function resolve(uint256 launchId) external;                         // after settleTime+MAX_LAG -> Graduating | Failed
 function redeem(uint256 launchId, address[] calldata users) external;
-function graduate(uint256 launchId) external;                        // Graduating -> Graduated: ILaunchRail(rail).launch{value: raised}(launchId)
+function graduate(uint256 launchId) external;                        // Graduating -> Graduated: rail.launch(launchId, raised) (see below)
 function receiveLoserTokens(uint256 launchId, address token, uint256 amount) external; // rail only: pulls 500M
 function claimTokens(uint256 launchId) external;                     // Graduated launches, incremental
 
@@ -138,7 +145,7 @@ imageURI }`.
 ### Rail and Flap contracts
 
 ```solidity
-interface ILaunchRail { function launch(uint256 launchId) external payable returns (address token, address pool); }
+interface ILaunchRail { function launch(uint256 launchId, uint256 quoteAmount) external payable returns (address token, address pool); }
 
 // contracts/src/flap/BilauncherLauncherFactory.sol  (is LauncherFactoryBase)
 constructor(address hub, address guardian, address exchange);
@@ -149,7 +156,8 @@ constructor(address hub, address guardian, address exchange);
 
 // contracts/src/flap/BilauncherLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
 function initialize(address hub, address creator, address exchange, LaunchConfig calldata c) external payable; // once
-function launch(uint256 launchId) external payable returns (address token, address pool); // only exchange; launchTaxTokenV2{value: msg.value}
+function launch(uint256 launchId, uint256 quoteAmount) external payable returns (address token, address pool); // only exchange; native: launchTaxTokenV2{value: quoteAmount}; ERC20: approve the Portal for quoteAmount, launchTaxTokenV2 pulls it
+function quoteToken() external view returns (address);               // read from the Exchange in initialize
 function initializeDistribution(address token, uint256 amount, bytes calldata, bytes32) external; // onlyHub, during launch only
 // after the Portal call returns, launch() approves and calls exchange.receiveLoserTokens(launchId, token, 500M)
 // _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "bilauncher prediction launch"
@@ -175,7 +183,9 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   Graduating/Graduated → winner credit `win × (10000 − cut) / 10000`, loser `loserShares += lose`.
   Failed (non-void) → winner credit `win` in full (the user's rule: a failed launch pays winners
   1.00).
-- `graduate`: `ILaunchRail(rail).launch{value: raised}(id)`; the rail must call
+- `graduate`: native: `ILaunchRail(rail).launch{value: raised}(id, raised)`; ERC20: `safeTransfer(rail, raised)`
+  then `launch(id, raised)`. Payouts: native pushes with a 10k-gas call, ERC20 with a non-reverting transfer;
+  either way a failure goes to `pendingPayout`. The rail must call
   `receiveLoserTokens` for exactly `LOSER_SUPPLY` before returning, or `graduate` reverts.
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
 - Batch: `lastBatchTs ≤ ts ≤ block.timestamp`, `block.timestamp − ts ≤ MAX_LAG`; apply keys, then

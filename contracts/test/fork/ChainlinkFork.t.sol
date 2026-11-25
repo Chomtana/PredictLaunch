@@ -27,7 +27,7 @@ contract ChainlinkForkTest is Test {
             return;
         }
         vm.createSelectFork(rpc);
-        ex = new Exchange(owner);
+        ex = new Exchange(owner, address(0));
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(BTCB_FEED, true);

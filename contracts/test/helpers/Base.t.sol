@@ -22,7 +22,7 @@ abstract contract Base is Test {
 
     function setUp() public virtual {
         vm.warp(1_800_000_000);
-        ex = new Exchange(owner);
+        ex = new Exchange(owner, address(0));
         feed = new MockFeed();
         vm.startPrank(owner);
         ex.setFactory(address(this));
@@ -152,7 +152,7 @@ abstract contract Base is Test {
 
     function _deposit(address u, uint256 amt) internal {
         vm.prank(u);
-        ex.deposit{value: amt}();
+        ex.deposit{value: amt}(amt);
     }
 
     function _warpTo(uint256 t) internal {

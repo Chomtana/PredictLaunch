@@ -17,7 +17,7 @@ import {Exchange} from "src/Exchange.sol";
 string constant BL_TITLE_ZH = unicode"预测市场发射";
 string constant BL_TITLE_EN = "bilauncher prediction launch";
 string constant BL_SUMMARY_ZH =
-    unicode"创作者设定一个价格预测市场。赢家获得每份 1 减去抽成，抽成用于注入流动性池。达到目标后，募集的 BNB 与 50% 的代币供应注入池子，另外 50% 由输家按输掉的份额领取。";
+    unicode"创作者设定一个价格预测市场。赢家获得每份 1 减去抽成，抽成用于注入流动性池。达到目标后，募集的报价代币与 50% 的代币供应注入池子，另外 50% 由输家按输掉的份额领取。";
 string constant BL_SUMMARY_EN =
     "A binary Up/Down price market funds the pool: winners are paid 1 minus the creator's cut, and the cut is the raise. At the target, the raise and 50% of the supply seed the pool; the other 50% is claimed by the losers in proportion to their losing shares.";
 
@@ -52,6 +52,8 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
     bool internal distributionInitialized;
     address public token;
     address public pool;
+    /// @notice The Exchange's quote token, the pool's quote side: address(0) = native BNB.
+    address public quoteToken;
 
     event Launched(address indexed token, address indexed pool, uint256 poolQuote, uint256 poolToken);
 
@@ -85,6 +87,7 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
         name = c.name;
         symbol = c.symbol;
         meta = c.imageURI;
+        quoteToken = Exchange(exchange_).quoteToken();
 
         uint256 fee = IPortal(hub_).SALT_LOCK_FEE();
         if (msg.value != fee) revert InvalidConfig();
@@ -100,13 +103,25 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
     }
 
     /// @inheritdoc ILaunchRail
-    function launch(uint256 id) external payable returns (address token_, address pool_) {
+    /// @dev Native: `quoteAmount` arrives as value and is forwarded. ERC20: the Exchange transferred it here first;
+    ///      the Portal is approved for exactly `quoteAmount` and pulls it inside `launchTaxTokenV2`.
+    function launch(uint256 id, uint256 quoteAmount) external payable returns (address token_, address pool_) {
         if (msg.sender != exchange) revert NotExchange();
         if (launched) revert AlreadyLaunched();
         if (!launchIdSet || id != launchId) revert InvalidConfig();
         launched = true;
 
-        IPortalTypes.CreateTaxTokenParams memory p = _buildParams(msg.value);
+        address q = quoteToken;
+        uint256 value;
+        if (q == address(0)) {
+            if (msg.value != quoteAmount) revert InvalidConfig();
+            value = quoteAmount;
+        } else {
+            if (msg.value != 0) revert InvalidConfig();
+            IERC20(q).forceApprove(hub, quoteAmount);
+        }
+
+        IPortalTypes.CreateTaxTokenParams memory p = _buildParams(quoteAmount);
         Distribution memory dist = Distribution({
             target: DistributionTarget.EXPLICIT,
             strategy: address(this),
@@ -116,11 +131,12 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
         IPortalTypes.CreatorBuyParams memory creatorBuy;
 
         launching = true;
-        (token_, pool_) = IPortal(hub).launchTaxTokenV2{value: msg.value}(p, dist, creatorBuy);
+        (token_, pool_) = IPortal(hub).launchTaxTokenV2{value: value}(p, dist, creatorBuy);
         launching = false;
+        if (q != address(0)) IERC20(q).forceApprove(hub, 0);
         token = token_;
         pool = pool_;
-        emit Launched(token_, pool_, msg.value, POOL_TOKEN);
+        emit Launched(token_, pool_, quoteAmount, POOL_TOKEN);
 
         IERC20(token_).forceApprove(exchange, LOSER_SUPPLY);
         Exchange(exchange).receiveLoserTokens(id, token_, LOSER_SUPPLY);
@@ -147,7 +163,7 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
     function _description() internal view override returns (LauncherDescription memory d) {
         d.name = name;
         d.symbol = symbol;
-        d.quoteToken = address(0);
+        d.quoteToken = quoteToken;
         d.targetRaise = target;
         d.poolTokenRatio = (POOL_TOKEN * 1e18) / TOTAL_SUPPLY;
         d.titleZh = BL_TITLE_ZH;
@@ -162,7 +178,7 @@ contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRa
         p.meta = meta;
         p.totalSupply = TOTAL_SUPPLY;
         p.salt = launchSalt;
-        p.quoteToken = address(0);
+        p.quoteToken = quoteToken;
         p.dexId = 0;
         p.poolQuote = poolQuote;
         p.poolToken = POOL_TOKEN;

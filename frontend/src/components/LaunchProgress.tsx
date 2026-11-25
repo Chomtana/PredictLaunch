@@ -2,6 +2,7 @@ import { big, n, poolOf, progressOf, type LaunchSummary, type UserLaunch } from 
 import { compact } from '../lib/format.ts'
 import { fmtBnb, fmtShares, LOSER_SUPPLY, num18, usd } from '../lib/units.ts'
 import { ProgressBar } from './ui.tsx'
+import { useQuote } from '../state.tsx'
 
 /** Tokens a loser gets: loserShares / totalLoserShares × 500M. */
 export const tokensFor = (loserShares: bigint, totalLoserShares: bigint) =>
@@ -10,15 +11,16 @@ export const tokensFor = (loserShares: bigint, totalLoserShares: bigint) =>
 /** Pool raised (or projected while live) vs target, plus the user's token estimate. */
 export function LaunchProgress({
   l,
-  bnbUsd,
+  quoteUsd,
   position,
   mine,
 }: {
   l: LaunchSummary
-  bnbUsd: bigint | null
+  quoteUsd: bigint | null
   position: { up: bigint; down: bigint } | null
   mine: UserLaunch | null
 }) {
+  const { symbol: q } = useQuote()
   const pool = poolOf(l)
   const target = big(l.target)
   const prog = progressOf(l)
@@ -33,10 +35,10 @@ export function LaunchProgress({
     <div className="panel section">
       <h3>{active ? 'Projected pool' : 'Pool'}</h3>
       <div className="pool-big">
-        <span className="v mono">{fmtBnb(pool, 3)} BNB</span>
-        <span className="muted">of {fmtBnb(target, 2)} BNB target</span>
+        <span className="v mono">{fmtBnb(pool, 3)} {q}</span>
+        <span className="muted">of {fmtBnb(target, 2)} {q} target</span>
         <span className="muted small" style={{ marginLeft: 'auto' }}>
-          {usd(pool, bnbUsd)}
+          {usd(pool, quoteUsd)}
         </span>
       </div>
       <ProgressBar value={prog} glow={prog >= 1} />
@@ -62,7 +64,7 @@ export function LaunchProgress({
         </div>
         <div className="stat">
           <span className="k">Opening price</span>
-          <span className="v mono">{pool > 0n ? `${(num18(pool) / 5e8).toExponential(2)} BNB` : '—'}</span>
+          <span className="v mono">{pool > 0n ? `${(num18(pool) / 5e8).toExponential(2)} ${q}` : '—'}</span>
         </div>
       </div>
       {mine && big(mine.loserShares) > 0n ? (

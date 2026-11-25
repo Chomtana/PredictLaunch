@@ -19,7 +19,7 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use anyhow::Context;
-use bilauncher_core::abi::{self, IAggregator, IExchange, IPortal};
+use bilauncher_core::abi::{self, IAggregator, IExchange, IPortal, IQuoteToken};
 use bilauncher_core::state::ChainEvent;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,10 @@ pub struct ChainInfo {
     pub chain_id: u64,
     pub salt_lock_fee: U256,
     pub min_target: U256,
+    /// `Exchange.quoteToken()`: address(0) = native BNB.
+    pub quote_token: Address,
+    /// The quote token's on-chain symbol ("BNB" for native).
+    pub quote_symbol: String,
 }
 
 pub trait Chain: Send + Sync + 'static {
@@ -51,6 +55,13 @@ pub trait Chain: Send + Sync + 'static {
     /// Dev faucet: `anvil_setBalance`.
     fn set_balance(
         &self,
+        who: Address,
+        amount: U256,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    /// Dev faucet: `quote.mint(who, amount)` from the operator (test tokens with a public mint).
+    fn mint_quote(
+        &self,
+        quote: Address,
         who: Address,
         amount: U256,
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
@@ -360,9 +371,13 @@ impl RpcChain {
     }
 
     async fn send<C: SolCall>(&self, call: C) -> anyhow::Result<B256> {
+        self.send_to(self.exchange, call).await
+    }
+
+    async fn send_to<C: SolCall>(&self, to: Address, call: C) -> anyhow::Result<B256> {
         let tx = TransactionRequest::default()
             .with_from(self.operator)
-            .with_to(self.exchange)
+            .with_to(to)
             .with_input(call.abi_encode());
         // Simulate first so a revert comes back as an error instead of a failed receipt.
         self.provider
@@ -502,6 +517,12 @@ impl Chain for RpcChain {
         Ok(())
     }
 
+    async fn mint_quote(&self, quote: Address, who: Address, amount: U256) -> anyhow::Result<()> {
+        self.send_to(quote, IQuoteToken::mintCall { to: who, amount })
+            .await?;
+        Ok(())
+    }
+
     async fn info(&self) -> anyhow::Result<ChainInfo> {
         let chain_id = self.provider.get_chain_id().await?;
         let salt_lock_fee = self
@@ -512,10 +533,24 @@ impl Chain for RpcChain {
             .view(self.exchange, IExchange::minTargetCall {})
             .await
             .unwrap_or(U256::from(2_150_000_000_000_000_000u64));
+        // Exchanges deployed before the quote token existed have no `quoteToken()`: native.
+        let quote_token = self
+            .view(self.exchange, IExchange::quoteTokenCall {})
+            .await
+            .unwrap_or(Address::ZERO);
+        let quote_symbol = if quote_token.is_zero() {
+            "BNB".to_string()
+        } else {
+            self.view(quote_token, IQuoteToken::symbolCall {})
+                .await
+                .context("reading the quote token's symbol")?
+        };
         Ok(ChainInfo {
             chain_id,
             salt_lock_fee,
             min_target,
+            quote_token,
+            quote_symbol,
         })
     }
 }

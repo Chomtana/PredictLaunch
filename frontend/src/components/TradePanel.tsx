@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Book, MsgResult } from '../lib/api.ts'
 import { bestPrice, levelsFor, walkBuy, walkSell } from '../lib/market.ts'
 import { cost, floorShares, fmtBnb, fmtShares, parseBnb, payout, type Outcome } from '../lib/units.ts'
-import type { OrderParams } from '../state.tsx'
+import { useQuote, type OrderParams } from '../state.tsx'
 import { Spinner } from './ui.tsx'
 
 export interface TradePanelProps {
@@ -31,6 +31,7 @@ const PRESETS: [string, bigint][] = [
 const NAME = ['Up', 'Down'] as const
 
 export function TradePanel(p: TradePanelProps) {
+  const { symbol: q } = useQuote()
   const [side, setSide] = useState<0 | 1>(0)
   const [outcome, setOutcome] = useState<Outcome>(0)
   const [mode, setMode] = useState<'market' | 'limit'>('market')
@@ -91,7 +92,7 @@ export function TradePanel(p: TradePanelProps) {
   if (side === 1 && held === 0n) problem = `You have no ${NAME[outcome]} shares to sell`
   else if (side === 1 && sharesWei > held) problem = `You hold ${fmtShares(held)} ${NAME[outcome]} shares`
   else if (mode === 'limit' && !lpOk) problem = 'Price must be 1–99¢'
-  else if (side === 0 && p.balance != null && spend > p.balance) problem = 'Not enough balance: deposit BNB first'
+  else if (side === 0 && p.balance != null && spend > p.balance) problem = `Not enough balance: deposit ${q} first`
   else if (mode === 'market' && levels.length === 0) problem = 'No liquidity on this side yet: try a limit order'
   const canSubmit = !problem && amount > 0n && price != null && p.tradable && !busy
 
@@ -169,16 +170,16 @@ export function TradePanel(p: TradePanelProps) {
                   const w = walkBuy(levels, v)
                   return (
                     <button key={label} className={`preset ${stakeWei === v ? 'on' : ''}`} onClick={() => setStake(label)}>
-                      <span className="amt">{label} BNB</span>
+                      <span className="amt">{label} {q}</span>
                       <span className="win">
-                        win <b>{fmtBnb(payout(w.shares, p.cutBps), 2)} BNB</b>
+                        win <b>{fmtBnb(payout(w.shares, p.cutBps), 2)} {q}</b>
                       </span>
                     </button>
                   )
                 })}
               </div>
               <div className="tp-input">
-                <label htmlFor="tp-stake">Amount (BNB)</label>
+                <label htmlFor="tp-stake">Amount ({q})</label>
                 <input id="tp-stake" inputMode="decimal" placeholder="0.0" value={stake} onChange={(e) => setStake(e.target.value)} />
               </div>
             </>
@@ -216,10 +217,10 @@ export function TradePanel(p: TradePanelProps) {
               <div>
                 <div className="muted small">To win</div>
                 <div className="muted small">
-                  {fmtShares(amount)} shares · cost {fmtBnb(spend, 4)} BNB
+                  {fmtShares(amount)} shares · cost {fmtBnb(spend, 4)} {q}
                 </div>
               </div>
-              <span className="big">{fmtBnb(win, 2)} BNB</span>
+              <span className="big">{fmtBnb(win, 2)} {q}</span>
             </div>
           ) : (
             <div className="to-win">
@@ -227,7 +228,7 @@ export function TradePanel(p: TradePanelProps) {
                 <div className="muted small">You receive</div>
                 <div className="muted small">{fmtShares(amount)} shares</div>
               </div>
-              <span className="big">{fmtBnb(receive, 4)} BNB</span>
+              <span className="big">{fmtBnb(receive, 4)} {q}</span>
             </div>
           )}
 
@@ -254,7 +255,7 @@ export function TradePanel(p: TradePanelProps) {
       <div className="tp-row">
         <span className="cut-badge">{p.cutBps / 100}% to launch</span>
         <span className="muted small">
-          winners get {(10000 - p.cutBps) / 100}¢ · bal {p.balance != null ? fmtBnb(p.balance, 3) : '—'} BNB
+          winners get {(10000 - p.cutBps) / 100}¢ · bal {p.balance != null ? fmtBnb(p.balance, 3) : '—'} {q}
         </span>
       </div>
     </div>

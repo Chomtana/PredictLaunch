@@ -12,6 +12,10 @@ import {ILauncherDescription} from "src/flap/ILauncher.sol";
 import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
 import {BilauncherLauncher} from "src/flap/BilauncherLauncher.sol";
 
+interface IMintable {
+    function mint(address to, uint256 amount) external;
+}
+
 interface IProxyAdminLike {
     function owner() external view returns (address);
 }
@@ -35,6 +39,8 @@ contract FlapForkTest is Test {
     address constant WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
     address constant ROUTER = 0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3;
     address constant BTCB_FEED = 0xe20536BC715AaC6560394e33deB66ed205AEeC33;
+    /// Flap's testnet faucet USDT (on-chain name/symbol "USD", 18 decimals, permissionless `mint`).
+    address constant USDT = 0x190C989D5665a0e404B444b53CAE9AbCfb600157;
 
     IPortal portal = IPortal(PORTAL);
     Exchange ex;
@@ -55,8 +61,15 @@ contract FlapForkTest is Test {
         }
         vm.createSelectFork(rpc);
         require(block.chainid == 97, "not BSC testnet");
+        _deploy(address(0));
 
-        ex = new Exchange(owner);
+        vm.deal(creator, 1 ether);
+        vm.deal(alice, 20 ether);
+        vm.deal(bob, 20 ether);
+    }
+
+    function _deploy(address quote) internal {
+        ex = new Exchange(owner, quote);
         factory = new BilauncherLauncherFactory(PORTAL, GUARDIAN, address(ex));
         vm.startPrank(owner);
         ex.setFactory(address(factory));
@@ -65,10 +78,6 @@ contract FlapForkTest is Test {
         vm.stopPrank();
         // Atlas feeds only serve EOAs and authorized callers: authorize the Exchange (mapping at slot 1)
         vm.store(BTCB_FEED, keccak256(abi.encode(address(ex), uint256(1))), bytes32(uint256(1)));
-
-        vm.deal(creator, 1 ether);
-        vm.deal(alice, 20 ether);
-        vm.deal(bob, 20 ether);
     }
 
     function _openFactory() internal {
@@ -106,7 +115,7 @@ contract FlapForkTest is Test {
         c.strike = _price();
         c.settleTime = uint64(block.timestamp + 600);
         c.cutBps = 3000;
-        c.target = 2.15 ether;
+        c.target = 2.15 ether * _k();
         c.salt = salt;
     }
 
@@ -147,6 +156,43 @@ contract FlapForkTest is Test {
         _fullFlow(keccak256("bilauncher-fork-unopened"));
     }
 
+    /// The same launch with Flap's testnet USDT as the quote: deposits, payouts and the pool are all USDT.
+    function test_graduateWithUsdtQuote() public {
+        _deploy(USDT);
+        vm.prank(owner);
+        ex.setMinTarget(1500 ether);
+        assertEq(ex.quoteToken(), USDT);
+        _fullFlow(keccak256("bilauncher-fork-usdt"));
+    }
+
+    /// Amount scale: native amounts are BNB; USDT ones are x1000 (the Portal's pool-quote floor is 1500 USDT, the
+    /// dollar value of the 2.15 BNB native floor).
+    function _k() internal view returns (uint256) {
+        return _quote() == address(0) ? 1 : 1000;
+    }
+
+    function _quote() internal view returns (address) {
+        return ex.quoteToken();
+    }
+
+    function _quoteBal(address a) internal view returns (uint256) {
+        address q = _quote();
+        return q == address(0) ? a.balance : IERC20(q).balanceOf(a);
+    }
+
+    function _fund(address u, uint256 amount) internal {
+        address q = _quote();
+        vm.startPrank(u);
+        if (q == address(0)) {
+            ex.deposit{value: amount}(amount);
+        } else {
+            IMintable(q).mint(u, amount);
+            IERC20(q).approve(address(ex), amount);
+            ex.deposit(amount);
+        }
+        vm.stopPrank();
+    }
+
     function _fullFlow(bytes32 seed) internal {
         bytes32 salt = _mineSalt(seed);
         Exchange.LaunchConfig memory c = _cfg(salt);
@@ -169,27 +215,27 @@ contract FlapForkTest is Test {
 
         string memory d = ILauncherDescription(launcher).description();
         _assertContains(d, '{"v":1,"name":"Loser Coin","symbol":"LOSE"');
-        _assertContains(d, '"quoteToken":"0x0000000000000000000000000000000000000000"');
-        _assertContains(d, '"targetRaise":"2150000000000000000"');
+        _assertContains(d, string.concat('"quoteToken":"', _lower(_quote()), '"'));
+        _assertContains(d, string.concat('"targetRaise":"', vm.toString(c.target), '"'));
         _assertContains(d, '"poolTokenRatio":"500000000000000000"');
         _assertContains(d, '"titleEn":"bilauncher prediction launch"');
 
         // trade: 8 pairs at 50/50 (cut 30% -> projected raise 2.4 BNB >= 2.15)
-        vm.prank(alice);
-        ex.deposit{value: 10 ether}();
-        vm.prank(bob);
-        ex.deposit{value: 10 ether}();
+        uint256 k = _k();
+        uint128 amt = uint128(8e18 * k);
+        _fund(alice, 10 ether * k);
+        _fund(bob, 10 ether * k);
         uint64 exp = uint64(block.timestamp + 1 days);
         Exchange.Batch memory b;
         b.ts = uint64(block.timestamp);
         b.orders = new Exchange.SignedOrder[](2);
-        b.orders[0] = _signed(Eip712.Order(bob, 0, 0, 1, 0, 50, 8e18, exp, 1), BOB_PK); // taker: Buy Down
-        b.orders[1] = _signed(Eip712.Order(alice, 0, 0, 0, 0, 50, 8e18, exp, 1), ALICE_PK); // maker: Buy Up
+        b.orders[0] = _signed(Eip712.Order(bob, 0, 0, 1, 0, 50, amt, exp, 1), BOB_PK); // taker: Buy Down
+        b.orders[1] = _signed(Eip712.Order(alice, 0, 0, 0, 0, 50, amt, exp, 1), ALICE_PK); // maker: Buy Up
         b.fills = new Exchange.Fill[](1);
-        b.fills[0] = Exchange.Fill(0, 1, 1, 8e18);
+        b.fills[0] = Exchange.Fill(0, 1, 1, amt);
         vm.prank(operator);
         ex.submitBatch(b);
-        assertEq(ex.projectedRaised(0), 2.4 ether);
+        assertEq(ex.projectedRaised(0), 2.4 ether * k);
 
         // settle above the strike on the real feed contract
         vm.warp(c.settleTime);
@@ -200,31 +246,36 @@ contract FlapForkTest is Test {
         l = ex.getLaunch(0);
         assertEq(l.outcome, 0, "Up");
         assertEq(l.status, 1, "Graduating");
-        assertEq(l.raised, 2.4 ether);
+        assertEq(l.raised, 2.4 ether * k);
 
-        uint256 exBal = address(ex).balance;
+        uint256 exBal = _quoteBal(address(ex));
         ex.graduate(0);
         l = ex.getLaunch(0);
         assertEq(l.status, 2, "Graduated");
         address token = l.token;
         assertEq(uint16(uint160(token)), 0x7777, "token ends in 7777");
         assertEq(BilauncherLauncher(launcher).token(), token);
-        assertEq(address(ex).balance, exBal - 2.4 ether);
+        assertEq(_quoteBal(address(ex)), exBal - 2.4 ether * k);
         assertEq(IERC20(token).balanceOf(address(ex)), 500_000_000e18, "Exchange holds the losers' 500M");
-        address pair = IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, WBNB);
+        address pair = IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, _quote() == address(0) ? WBNB : _quote());
         assertTrue(pair != address(0), "PancakeSwap pair exists");
         assertEq(IERC20(token).balanceOf(pair), 500_000_000e18, "pool holds 500M");
+        if (_quote() != address(0)) assertEq(IERC20(_quote()).balanceOf(pair), 2.4 ether * k, "pool holds the USDT raise");
 
         // redeem: Alice (Up) gets 8 * 0.70, Bob's 8 Down make him the only loser -> he claims all 500M
         address[] memory us = new address[](2);
         us[0] = alice;
         us[1] = bob;
         ex.redeem(0, us);
-        assertEq(ex.balanceOf(alice), 10 ether - 4 ether + 5.6 ether);
+        assertEq(ex.balanceOf(alice), (10 ether - 4 ether + 5.6 ether) * k);
         vm.prank(bob);
         ex.claimTokens(0);
         assertEq(IERC20(token).balanceOf(bob), 500_000_000e18);
         assertFalse(ex.isTradable(0, uint64(block.timestamp)));
+    }
+
+    function _lower(address a) internal pure returns (string memory) {
+        return vm.toLowercase(vm.toString(a));
     }
 
     function _assertContains(string memory h, string memory n) internal pure {

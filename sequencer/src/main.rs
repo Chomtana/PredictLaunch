@@ -37,7 +37,8 @@ struct Args {
     /// Chain poll + keeper interval in milliseconds.
     #[arg(long, env = "BILAUNCHER_POLL_MS", default_value_t = 1000)]
     poll_ms: u64,
-    /// Enable POST /api/faucet (anvil_setBalance, 1000 BNB). Fork/dev only.
+    /// Enable POST /api/faucet (anvil_setBalance 1000 BNB, plus a 10,000 mint of an ERC20 quote token). Fork/dev
+    /// only.
     #[arg(long, env = "BILAUNCHER_DEV_FAUCET")]
     dev_faucet: bool,
     /// First block to read Exchange logs from (default: found by binary search on its code).
@@ -46,6 +47,9 @@ struct Args {
     /// Atlas offchain price API for the chart stream ("off" = onchain feeds only).
     #[arg(long, env = "BILAUNCHER_PRICE_API", default_value = bilauncher_sequencer::prices::ATLAS_API)]
     price_api: String,
+    /// Display name for the quote token (default: its on-chain symbol; "BNB" for native).
+    #[arg(long, env = "BILAUNCHER_QUOTE_SYMBOL")]
+    quote_symbol: Option<String>,
 }
 
 #[tokio::main]
@@ -82,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         start_block,
         price_api: (!args.price_api.is_empty() && args.price_api != "off")
             .then_some(args.price_api.clone()),
+        quote_symbol: args.quote_symbol.clone(),
     };
     let app = app::App::new(chain, settings).await?;
     app.spawn_background();
