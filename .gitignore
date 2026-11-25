@@ -29,3 +29,6 @@ dist/
 !.vscode/settings.json
 
 *.tsbuildinfo
+
+# Agent worktrees
+.claude/worktrees/

@@ -195,7 +195,7 @@ makerPrice, amount)`.
 
 ```
 GET  /api/status            {lastBatchId, lastBatchTs, pendingFills, inflight:bool, softReversals}
-GET  /api/config            {chainId, rpc, exchange, portal, saltLockFee, minTarget, cuts:[1000..3000],
+GET  /api/config            {chainId, rpc, exchange, factory, portal, saltLockFee, minTarget, cuts:[1000..3000],
                              feeds:[{address, symbol, intervals:[300,...], fast:bool}], batchMs}
 GET  /api/launches          [LaunchSummary]   (launch fields + liveRound, upPrice (best mid, cents|null), progress)
 GET  /api/launch/:id        LaunchDetail      (LaunchSummary + rounds: last 20 RoundView + current/next times)
