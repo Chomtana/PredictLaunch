@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {Eip712} from "src/lib/Eip712.sol";
 
@@ -18,6 +19,10 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint256 public constant MAX_LAG = 15;
     /// @dev Gas forwarded on a push payout; a receiver that needs more gets `pendingPayout` instead.
     uint256 internal constant PUSH_GAS = 10_000;
+    uint256 public constant SHARE_UNIT = 1e16;
+
+    /// @notice EIP-712 domain: ("bilauncher", "1", chainid, this).
+    bytes32 public immutable DOMAIN_SEPARATOR;
 
     // ---------------------------------------------------------------------------------------------------------
     // Types
@@ -77,6 +82,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint64 public lastBatchTs;
     uint64 public batchCount;
 
+    mapping(address owner => mapping(address key => uint64)) public keyExpiry;
+    mapping(address owner => mapping(uint64 nonce => bool)) public usedKeyNonce;
+    mapping(bytes32 orderHash => bool) public cancelled;
+    mapping(address owner => uint64) public minNonce;
+    mapping(bytes32 orderHash => uint128) public filled;
+
     // ---------------------------------------------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------------------------------------------
@@ -90,6 +101,10 @@ contract Exchange is Ownable, ReentrancyGuard {
     event WithdrawPaid(uint64 indexed idx, address indexed user, uint256 requested, uint256 paid);
     event PayoutPending(address indexed user, uint256 amount);
     event PayoutClaimed(address indexed user, uint256 amount);
+    event KeyAuthorized(address indexed owner, address indexed key, uint64 expiry);
+    event KeyRevoked(address indexed owner, address indexed key);
+    event OrderCancelled(address indexed owner, bytes32 indexed orderHash);
+    event MinNonceBumped(address indexed owner, uint64 minNonce);
     event BatchSubmitted(uint64 indexed batchId, uint64 ts, uint256 fills);
 
     // ---------------------------------------------------------------------------------------------------------
@@ -105,6 +120,13 @@ contract Exchange is Ownable, ReentrancyGuard {
     error NothingToClaim();
     error TransferFailed();
     error BadBatchTs();
+    error BadSignature();
+    error KeyNonceUsed();
+    error NotOwner();
+    error BadNonce();
+    error OrderDead();
+    error Expired();
+    error BadOrder();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
@@ -113,6 +135,7 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     constructor(address owner_) Ownable(owner_) {
         minTarget = 2.15 ether;
+        DOMAIN_SEPARATOR = Eip712.domainSeparator(block.chainid, address(this));
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -200,6 +223,70 @@ contract Exchange is Ownable, ReentrancyGuard {
             pendingPayout[to] += amount;
             emit PayoutPending(to, amount);
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Keys, cancels, signatures
+    // ---------------------------------------------------------------------------------------------------------
+
+    function authorizeKey(address key, uint64 expiry) external {
+        keyExpiry[msg.sender][key] = expiry;
+        emit KeyAuthorized(msg.sender, key, expiry);
+    }
+
+    function revokeKey(address key) external {
+        keyExpiry[msg.sender][key] = 0;
+        emit KeyRevoked(msg.sender, key);
+    }
+
+    function cancelOrder(Eip712.Order calldata o) external {
+        if (msg.sender != o.owner) revert NotOwner();
+        bytes32 h = orderHash(o);
+        cancelled[h] = true;
+        emit OrderCancelled(msg.sender, h);
+    }
+
+    function bumpMinNonce(uint64 newMin) external {
+        if (newMin <= minNonce[msg.sender]) revert BadNonce();
+        minNonce[msg.sender] = newMin;
+        emit MinNonceBumped(msg.sender, newMin);
+    }
+
+    function orderHash(Eip712.Order calldata o) public view returns (bytes32) {
+        return Eip712.hashOrder(DOMAIN_SEPARATOR, o);
+    }
+
+    /// @dev Valid iff signed by the owner, or by a key of the owner whose expiry is >= ts.
+    function _checkSig(Eip712.Order calldata o, bytes calldata sig, uint64 ts) internal view returns (bytes32 h) {
+        h = orderHash(o);
+        (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, sig);
+        if (err != ECDSA.RecoverError.NoError || signer == address(0)) revert BadSignature();
+        if (signer != o.owner) {
+            uint64 exp = keyExpiry[o.owner][signer];
+            if (exp == 0 || exp < ts) revert BadSignature();
+        }
+    }
+
+    /// @dev Signature plus every per-order rule that does not depend on the launch.
+    function _checkOrder(Eip712.Order calldata o, bytes calldata sig, uint64 ts) internal view returns (bytes32 h) {
+        if (
+            o.round != 0 || o.outcome > 1 || o.side > 1 || o.price == 0 || o.price > 99 || o.amount == 0
+                || o.amount % SHARE_UNIT != 0
+        ) revert BadOrder();
+        if (o.expiry < ts) revert Expired();
+        h = _checkSig(o, sig, ts);
+        if (cancelled[h] || o.nonce < minNonce[o.owner]) revert OrderDead();
+    }
+
+    /// @dev An owner-signed AuthorizeKey carried in a batch; each (owner, nonce) is usable once.
+    function _applyKeyAuth(KeyAuth calldata k) internal {
+        if (usedKeyNonce[k.owner][k.nonce]) revert KeyNonceUsed();
+        bytes32 h = Eip712.hashAuthorizeKey(DOMAIN_SEPARATOR, k.owner, k.key, k.expiry, k.nonce);
+        (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, k.sig);
+        if (err != ECDSA.RecoverError.NoError || signer != k.owner || signer == address(0)) revert BadSignature();
+        usedKeyNonce[k.owner][k.nonce] = true;
+        keyExpiry[k.owner][k.key] = k.expiry;
+        emit KeyAuthorized(k.owner, k.key, k.expiry);
     }
 
     // ---------------------------------------------------------------------------------------------------------
