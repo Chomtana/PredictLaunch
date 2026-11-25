@@ -969,7 +969,7 @@ main {
 .chart-legend {
   position: absolute;
   left: 8px;
-  bottom: 8px;
+  top: 8px;
   z-index: 2;
   font-size: 11.5px;
   padding: 3px 8px;
@@ -1019,9 +1019,16 @@ main {
 }
 .tp-tabs .mode {
   margin-left: auto;
+  width: auto;
   font-size: 13px;
   font-weight: 600;
   border: 0;
+  background: transparent;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.num {
+  font-variant-numeric: tabular-nums;
 }
 .outcome-btns {
   display: grid;
@@ -1370,4 +1377,10 @@ main {
   .row2 {
     grid-template-columns: 1fr;
   }
+}
+.lc-result {
+  font-size: 13.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-2);
 }

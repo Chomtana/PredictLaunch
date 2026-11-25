@@ -45,7 +45,7 @@ export function PriceHeader(p: {
       <div className="ph-stats">
         <div className="ph-stat">
           <div className="label">Price to beat</div>
-          <div className="value mono">{fmtPrice(p.strike)}</div>
+          <div className="value num">{fmtPrice(p.strike)}</div>
         </div>
         <div className="ph-sep" />
         <div className="ph-stat current">
@@ -57,7 +57,7 @@ export function PriceHeader(p: {
               </span>
             )}
           </div>
-          <div className="value mono">{shown != null ? fmtPrice(shown) : '—'}</div>
+          <div className="value num">{shown != null ? fmtPrice(shown) : '—'}</div>
         </div>
         {p.phase === 'live' ? (
           <div className={`countdown ${left > 3600 ? 'calm' : ''}`} aria-label="Time to settlement">

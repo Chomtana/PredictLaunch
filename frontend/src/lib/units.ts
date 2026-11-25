@@ -89,4 +89,8 @@ export function usd(bnbWei: bigint, bnbUsd: bigint | null | undefined): string {
 }
 
 /** An 18-dec feed price as USD text. */
-export const fmtPrice = (p: bigint | string | null | undefined) => (p == null ? '—' : fmtUsd(num18(p)))
+export function fmtPrice(p: bigint | string | null | undefined): string {
+  if (p == null) return '—'
+  const v = num18(p)
+  return fmtUsd(v, v >= 1000 && Number.isInteger(v) ? 0 : undefined)
+}

@@ -54,6 +54,25 @@ export function asset(feedSymbol?: string | null): string {
   return base === 'BTCB' ? 'BTC' : base
 }
 
+/** Chart axis labels in the viewer's timezone (lightweight-charts TickMarkType: 0 Year … 4 TimeWithSeconds). */
+export function chartTick(sec: number, tickType: number): string {
+  const d = new Date(sec * 1000)
+  const o: Intl.DateTimeFormatOptions =
+    tickType === 0
+      ? { year: 'numeric' }
+      : tickType === 1
+        ? { month: 'short' }
+        : tickType === 2
+          ? { month: 'short', day: 'numeric' }
+          : tickType === 3
+            ? { hour: '2-digit', minute: '2-digit', hour12: false }
+            : { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
+  return d.toLocaleString(undefined, o)
+}
+
+export const chartCrosshair = (sec: number) =>
+  new Date(sec * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+
 export function hue(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360

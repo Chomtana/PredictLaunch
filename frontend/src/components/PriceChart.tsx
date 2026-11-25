@@ -8,10 +8,13 @@ import {
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type TickMarkType,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { Address } from 'viem'
 import { api } from '../lib/api.ts'
+import { chartCrosshair, chartTick } from '../lib/format.ts'
 import { num18 } from '../lib/units.ts'
 import { useApp } from '../state.tsx'
 
@@ -34,7 +37,14 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#828da0', fontFamily: 'Inter Variable, system-ui', attributionLogo: false },
       grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(255,255,255,0.05)' } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.15, bottom: 0.15 } },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: true, rightOffset: 6 },
+      timeScale: {
+        borderVisible: false,
+        timeVisible: true,
+        secondsVisible: true,
+        rightOffset: 6,
+        tickMarkFormatter: (t: Time, k: TickMarkType) => chartTick(t as number, k),
+      },
+      localization: { timeFormatter: (t: Time) => chartCrosshair(t as number) },
       crosshair: { mode: CrosshairMode.Magnet },
       handleScroll: true,
       handleScale: true,

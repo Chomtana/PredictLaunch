@@ -63,6 +63,7 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
         <span>{questionShort(l, sym)}</span>
       </div>
 
+      {phase === 'live' || phase === 'settling' ? (
       <div className="lc-odds">
         <div className="odds-bar">
           <div className="odds-up" style={{ width: `${up ?? 50}%` }} />
@@ -77,6 +78,19 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
           <span className="down">Down {up != null ? `${100 - up}¢` : '—'}</span>
         </div>
       </div>
+      ) : (
+        <div className="lc-result">
+          {phase === 'void' ? (
+            <span className="muted">Void · no settlement price</span>
+          ) : (
+            <>
+              Settled{' '}
+              <b className={n(l.outcome) === 0 ? 'up' : 'down'}>{n(l.outcome) === 0 ? 'Up ▲' : 'Down ▼'}</b>
+              {l.snapped && <span className="muted"> at {fmtPrice(l.settlePrice)}</span>}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="lc-progress">
         <div className="lc-progress-top">
