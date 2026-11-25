@@ -6,6 +6,7 @@
 //! revert.
 
 pub mod abi;
+pub mod book;
 pub mod eip712;
 pub mod types;
 
