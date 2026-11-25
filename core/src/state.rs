@@ -74,6 +74,31 @@ pub struct Launch {
     pub total_loser_shares: U256,
     /// Open pairs at resolution.
     pub resolved_pairs: U256,
+    /// Question launches: the question text (from `QuestionSet`).
+    pub question: Option<String>,
+    /// Question launches: the Cournot market id (0 = no match).
+    pub market_id: u64,
+    /// Question launches: the current resolver proposal or owner override.
+    pub proposal: Option<Proposal>,
+}
+
+impl Launch {
+    /// A question launch has `feed == address(0)` (SPEC).
+    pub fn is_question(&self) -> bool {
+        self.feed.is_zero()
+    }
+}
+
+/// `OutcomeProposed` state of a question launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Proposal {
+    /// 0 YES, 1 NO, 2 VOID.
+    pub outcome: u8,
+    /// Block timestamp of the `OutcomeProposed` event.
+    pub proposed_at: u64,
+    pub evidence_hash: B256,
+    /// Owner override: resolvable immediately.
+    pub final_: bool,
 }
 
 /// Decoded `Exchange` events (SPEC "Events"), in chain order.
@@ -131,6 +156,23 @@ pub enum ChainEvent {
         launch_id: u64,
         price: U256,
         updated_at: u64,
+    },
+    QuestionSet {
+        launch_id: u64,
+        question: String,
+        market_id: u64,
+    },
+    OutcomeProposed {
+        launch_id: u64,
+        outcome: u8,
+        evidence_hash: B256,
+        by: Address,
+        final_: bool,
+        /// Block timestamp of the event (0 if unknown).
+        proposed_at: u64,
+    },
+    ChallengeWindowSet {
+        seconds: u64,
     },
     Resolved {
         launch_id: u64,
@@ -455,6 +497,8 @@ pub struct State {
     pub trades: VecDeque<TradeRec>,
     pub loser_shares: HashMap<(u64, Address), U256>,
     pub claimed_shares: HashMap<(u64, Address), U256>,
+    /// `Exchange.challengeWindow` (read at startup, then from `ChallengeWindowSet`).
+    pub challenge_window: u64,
     next_seq: u64,
     next_fill_id: u64,
 }
@@ -483,6 +527,7 @@ impl State {
             trades: VecDeque::new(),
             loser_shares: HashMap::new(),
             claimed_shares: HashMap::new(),
+            challenge_window: DEFAULT_CHALLENGE_WINDOW,
             next_seq: 0,
             next_fill_id: 0,
         }
@@ -801,9 +846,40 @@ impl State {
                         raised: U256::ZERO,
                         total_loser_shares: U256::ZERO,
                         resolved_pairs: U256::ZERO,
+                        question: None,
+                        market_id: 0,
+                        proposal: None,
                     },
                 );
             }
+            E::QuestionSet {
+                launch_id,
+                question,
+                market_id,
+            } => {
+                if let Some(l) = self.launches.get_mut(&launch_id) {
+                    l.question = Some(question);
+                    l.market_id = market_id;
+                }
+            }
+            E::OutcomeProposed {
+                launch_id,
+                outcome,
+                evidence_hash,
+                final_,
+                proposed_at,
+                ..
+            } => {
+                if let Some(l) = self.launches.get_mut(&launch_id) {
+                    l.proposal = Some(Proposal {
+                        outcome,
+                        proposed_at,
+                        evidence_hash,
+                        final_,
+                    });
+                }
+            }
+            E::ChallengeWindowSet { seconds } => self.challenge_window = seconds,
             E::Snapshot {
                 launch_id,
                 price,

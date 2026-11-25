@@ -11,6 +11,12 @@ pub const MAX_LAG: u64 = 15;
 pub const FORCE_DELAY: u64 = 600;
 pub const MIN_DURATION: u64 = 300;
 pub const MAX_DURATION: u64 = 30 * 86_400;
+/// Question launches: no proposal by settleTime + this → `resolve` voids.
+pub const QUESTION_DEADLINE: u64 = 7 * 86_400;
+/// `Exchange.challengeWindow` default (owner-settable, ≤ 7 days).
+pub const DEFAULT_CHALLENGE_WINDOW: u64 = 3600;
+/// Question text limit, in bytes.
+pub const MAX_QUESTION_BYTES: usize = 280;
 pub const CUTS: [u16; 5] = [1000, 1500, 2000, 2500, 3000];
 pub const LOSER_SUPPLY: u128 = 500_000_000 * 10u128.pow(18);
 /// Fills per batch cap (gas).

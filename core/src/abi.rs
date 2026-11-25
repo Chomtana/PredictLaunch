@@ -49,6 +49,15 @@ alloy_sol_types::sol! {
     struct LaunchConfig {
         string name; string symbol; string imageURI; address feed; uint256 strike;
         uint64 settleTime; uint16 cutBps; uint256 target; bytes32 salt;
+        /// Question launches only ("" and 0 for a price launch).
+        string question; uint256 marketId;
+    }
+
+    /// `getQuestion(id)`: empty for a price launch.
+    #[derive(Debug, PartialEq, Eq)]
+    struct QuestionView {
+        string question; uint256 marketId; bool proposed; uint8 proposedOutcome;
+        uint64 proposedAt; bytes32 evidenceHash; bool final_;
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +111,17 @@ alloy_sol_types::sol! {
         /// Public state variable behind `setMinTarget` (not in SPEC's view list; read with a fallback).
         function minTarget() external view returns (uint256);
 
+        // Question launches (SPEC "Question launches (Cournot)").
+        function QUESTION_DEADLINE() external view returns (uint256);
+        function resolver() external view returns (address);
+        function challengeWindow() external view returns (uint64);
+        function setResolver(address r) external;
+        function setChallengeWindow(uint64 s) external;
+        function getQuestion(uint256 id) external view returns (QuestionView memory);
+        function isQuestion(uint256 id) external view returns (bool);
+        function proposeOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external;
+        function overrideOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external;
+
         event Deposited(address user, uint256 amount);
         event WithdrawRequested(uint64 idx, address user, uint256 amount);
         event WithdrawPaid(uint64 idx, address user, uint256 requested, uint256 paid);
@@ -120,6 +140,10 @@ alloy_sol_types::sol! {
         event Redeemed(uint256 launchId, address user, uint256 credit, uint256 loserShares);
         event TokensClaimed(uint256 launchId, address user, uint256 amount);
         event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
+        event QuestionSet(uint256 launchId, string question, uint256 marketId);
+        event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
+        event ResolverSet(address resolver);
+        event ChallengeWindowSet(uint64 seconds_);
         event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice,
             uint128 amount);
     }
