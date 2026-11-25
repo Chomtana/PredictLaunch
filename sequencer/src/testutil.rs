@@ -268,6 +268,19 @@ pub fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// Oracle settings that never reach the network: a closed local port, a fresh temp dir, no rate limit.
+pub fn offline_oracle() -> crate::oracle::OracleSettings {
+    crate::oracle::OracleSettings {
+        cournot: crate::cournot::CournotConfig {
+            mode: crate::cournot::Mode::Live,
+            api_base: "http://127.0.0.1:1".into(),
+            api_key: None,
+        },
+        dir: temp_dir("oracle"),
+        rate_limit_ms: 0,
+    }
+}
+
 /// A fresh, empty directory under the system temp dir (for oracle stores in tests).
 pub fn temp_dir(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};

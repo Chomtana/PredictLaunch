@@ -44,6 +44,7 @@ async fn rpc_chain_round_trip() {
             start_block: start,
             price_api: None,
             quote_symbol: None,
+            oracle: bilauncher_sequencer::testutil::offline_oracle(),
         },
     )
     .await

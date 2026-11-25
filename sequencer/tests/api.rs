@@ -48,6 +48,7 @@ impl T {
             start_block: 0,
             price_api: None,
             quote_symbol: quote_symbol.map(Into::into),
+            oracle: bilauncher_sequencer::testutil::offline_oracle(),
         };
         let app = App::new(chain, settings).await.unwrap();
         let router = api::router(app.clone());

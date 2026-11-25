@@ -3,7 +3,8 @@
 use alloy_primitives::Address;
 use anyhow::Context;
 use bilauncher_core::{Domain, PORTAL};
-use bilauncher_sequencer::{api, app, chain::RpcChain};
+use bilauncher_sequencer::cournot::{self, CournotConfig, Mode};
+use bilauncher_sequencer::{api, app, chain::RpcChain, oracle};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -50,6 +51,19 @@ struct Args {
     /// Display name for the quote token (default: its on-chain symbol; "BNB" for native).
     #[arg(long, env = "BILAUNCHER_QUOTE_SYMBOL")]
     quote_symbol: Option<String>,
+    /// Cournot oracle for question launches: "live" (real probability calls) or "mock" (simulated from
+    /// the matched market's price; `resolve` is always live).
+    #[arg(long, env = "COURNOT_MODE", default_value = "live")]
+    cournot_mode: Mode,
+    /// Cournot API base URL.
+    #[arg(long, env = "COURNOT_API_BASE", default_value = cournot::DEFAULT_API_BASE)]
+    cournot_api_base: String,
+    /// Cournot API key (header COURNOT-API-KEY). Optional; never logged.
+    #[arg(long, env = "COURNOT_API_KEY", hide_env_values = true)]
+    cournot_api_key: Option<String>,
+    /// Where oracle records are kept (launch-<id>.json, price-<id>.json, settle-<id>.json, previews).
+    #[arg(long, env = "BILAUNCHER_ORACLE_DIR", default_value = oracle::DEFAULT_ORACLE_DIR)]
+    oracle_dir: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -87,6 +101,15 @@ async fn main() -> anyhow::Result<()> {
         price_api: (!args.price_api.is_empty() && args.price_api != "off")
             .then_some(args.price_api.clone()),
         quote_symbol: args.quote_symbol.clone(),
+        oracle: oracle::OracleSettings {
+            cournot: CournotConfig {
+                mode: args.cournot_mode,
+                api_base: args.cournot_api_base.clone(),
+                api_key: args.cournot_api_key.clone().filter(|k| !k.trim().is_empty()),
+            },
+            dir: args.oracle_dir.clone(),
+            rate_limit_ms: oracle::DEFAULT_RATE_LIMIT_MS,
+        },
     };
     let app = app::App::new(chain, settings).await?;
     app.spawn_background();
@@ -101,7 +124,18 @@ async fn main() -> anyhow::Result<()> {
         args.batch_ms,
         if args.dev_faucet { ", dev faucet ON" } else { "" }
     );
-    axum::serve(listener, api::router(app))
+    tracing::info!(
+        "Cournot {} mode via {} (API key {}), oracle files in {}",
+        args.cournot_mode,
+        args.cournot_api_base,
+        if args.cournot_api_key.as_deref().is_some_and(|k| !k.trim().is_empty()) { "set" } else { "not set" },
+        args.oracle_dir.display()
+    );
+    // Peer addresses feed the per-IP rate limit of the Cournot endpoints.
+    axum::serve(
+        listener,
+        api::router(app).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

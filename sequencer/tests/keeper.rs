@@ -201,6 +201,7 @@ fn settings() -> Settings {
         start_block: 0,
         price_api: None,
         quote_symbol: None,
+        oracle: bilauncher_sequencer::testutil::offline_oracle(),
     }
 }
 

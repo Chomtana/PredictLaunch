@@ -30,6 +30,8 @@ pub struct Settings {
     /// Display name of the quote token, overriding its on-chain symbol (Flap's faucet "USD" is shown as
     /// "USDT"). `None`: the on-chain symbol.
     pub quote_symbol: Option<String>,
+    /// Cournot client, oracle store and API rate limit (question launches).
+    pub oracle: crate::oracle::OracleSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +60,9 @@ pub struct App<C: Chain> {
     pub last_error: Mutex<Option<String>>,
     next_block: Mutex<u64>,
     batch_lock: tokio::sync::Mutex<()>,
-    keeper_lock: tokio::sync::Mutex<()>,
+    pub(crate) keeper_lock: tokio::sync::Mutex<()>,
+    /// Cournot client, oracle files and caches (question launches).
+    pub oracle: crate::oracle::Oracle,
     backoff: Mutex<HashMap<KeeperAction, u64>>,
 }
 
@@ -79,7 +83,9 @@ impl<C: Chain> App<C> {
         });
         state.challenge_window = info.challenge_window;
         let start = settings.start_block;
+        let oracle = crate::oracle::Oracle::new(&settings.oracle);
         let app = Arc::new(App {
+            oracle,
             chain,
             settings,
             info,
@@ -311,7 +317,7 @@ impl<C: Chain> App<C> {
         }
     }
 
-    /// Background loops: chain poll + keeper, batch timer, price stream.
+    /// Background loops: chain poll + keeper, batch timer, oracle (Cournot), price stream.
     pub fn spawn_background(self: &Arc<Self>) {
         let app = self.clone();
         tokio::spawn(async move {
@@ -332,6 +338,7 @@ impl<C: Chain> App<C> {
                 let _ = app.run_batch().await;
             }
         });
+        crate::oracle::spawn(self);
         let app = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(PRICE_POLL);
