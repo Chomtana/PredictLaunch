@@ -16,6 +16,10 @@ contract ExchangeHarness is Exchange {
         return _checkOrder(o, sig, ts);
     }
 
+    function setPairs(uint256 id, uint128 pairs) external {
+        _launches[id].pairs = pairs;
+    }
+
     function applyKeyAuth(KeyAuth calldata k) external {
         _applyKeyAuth(k);
     }

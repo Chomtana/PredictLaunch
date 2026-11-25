@@ -31,6 +31,33 @@ abstract contract Base is Test {
         vm.deal(carol, 100 ether);
     }
 
+    address constant RAIL = address(0x8A11);
+    address constant TOKEN = address(0x7777);
+
+    function _cfg() internal view returns (Exchange.LaunchConfig memory c) {
+        c.name = "Moon";
+        c.symbol = "MOON";
+        c.imageURI = "ipfs://moon";
+        c.feed = address(feed);
+        c.strike = 100e18;
+        c.settleTime = uint64(block.timestamp + 3600);
+        c.cutBps = 1000;
+        c.target = 2.15 ether;
+        c.salt = bytes32(uint256(1));
+    }
+
+    function _register(Exchange.LaunchConfig memory c) internal returns (uint256) {
+        return ex.registerLaunch(RAIL, alice, TOKEN, c);
+    }
+
+    /// Snapshot the settlement price `p` (feed updated exactly at settleTime).
+    function _settle(uint256 id, int256 p) internal {
+        uint64 st = ex.getLaunch(id).settleTime;
+        if (block.timestamp < st) vm.warp(st);
+        feed.set(p, st);
+        ex.snapshot(id);
+    }
+
     function _deposit(address u, uint256 amt) internal {
         vm.prank(u);
         ex.deposit{value: amt}();

@@ -6,6 +6,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {Eip712} from "src/lib/Eip712.sol";
+import {ISingleFeed} from "src/interfaces/ISingleFeed.sol";
 
 /// @title bilauncher Exchange
 /// @notice Native-BNB custody, binary Up/Down markets (one per launch), batched settlement of signed orders, and
@@ -20,6 +21,19 @@ contract Exchange is Ownable, ReentrancyGuard {
     /// @dev Gas forwarded on a push payout; a receiver that needs more gets `pendingPayout` instead.
     uint256 internal constant PUSH_GAS = 10_000;
     uint256 public constant SHARE_UNIT = 1e16;
+    uint256 public constant SNAP_TOLERANCE = 5;
+    uint256 public constant GRACE = 60;
+    uint256 public constant MIN_DURATION = 300;
+    uint256 public constant MAX_DURATION = 30 days;
+    uint256 public constant LOSER_SUPPLY = 500_000_000e18;
+
+    uint8 public constant ACTIVE = 0;
+    uint8 public constant GRADUATING = 1;
+    uint8 public constant GRADUATED = 2;
+    uint8 public constant FAILED = 3;
+    uint8 internal constant UP = 0;
+    uint8 internal constant DOWN = 1;
+    uint8 internal constant VOID = 2;
 
     /// @notice EIP-712 domain: ("bilauncher", "1", chainid, this).
     bytes32 public immutable DOMAIN_SEPARATOR;
@@ -27,6 +41,44 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
     // Types
     // ---------------------------------------------------------------------------------------------------------
+
+    /// @notice The creator's launch payload (`abi.encode(LaunchConfig)` is the Flap `newLauncher` data).
+    struct LaunchConfig {
+        string name;
+        string symbol;
+        string imageURI;
+        address feed;
+        uint256 strike;
+        uint64 settleTime;
+        uint16 cutBps;
+        uint256 target;
+        bytes32 salt;
+    }
+
+    /// @notice A launch and its single binary market. Also the storage layout.
+    struct LaunchView {
+        address creator;
+        address rail;
+        address feed;
+        uint256 strike;
+        uint64 settleTime;
+        uint64 createdAt;
+        uint16 cutBps;
+        uint256 target;
+        uint128 pairs;
+        uint256 raised;
+        uint8 status; // 0 Active, 1 Graduating, 2 Graduated, 3 Failed
+        uint8 outcome; // 0 Up, 1 Down, 2 Void (valid once resolved)
+        uint256 settlePrice;
+        uint64 settleUpdatedAt;
+        bool snapped;
+        bool resolved;
+        address token;
+        uint256 totalLoserShares;
+        string name;
+        string symbol;
+        string imageURI;
+    }
 
     struct SignedOrder {
         Eip712.Order order;
@@ -88,6 +140,8 @@ contract Exchange is Ownable, ReentrancyGuard {
     mapping(address owner => uint64) public minNonce;
     mapping(bytes32 orderHash => uint128) public filled;
 
+    LaunchView[] internal _launches;
+
     // ---------------------------------------------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------------------------------------------
@@ -105,6 +159,24 @@ contract Exchange is Ownable, ReentrancyGuard {
     event KeyRevoked(address indexed owner, address indexed key);
     event OrderCancelled(address indexed owner, bytes32 indexed orderHash);
     event MinNonceBumped(address indexed owner, uint64 minNonce);
+    event LaunchCreated(
+        uint256 indexed launchId,
+        address indexed creator,
+        address rail,
+        address token,
+        address feed,
+        uint256 strike,
+        uint64 settleTime,
+        uint16 cutBps,
+        uint256 target,
+        string name,
+        string symbol,
+        string imageURI
+    );
+    event Snapshot(uint256 indexed launchId, uint256 price, uint64 updatedAt);
+    event Resolved(uint256 indexed launchId, uint8 outcome, uint128 pairs, uint256 raised);
+    event Graduating(uint256 indexed launchId);
+    event LaunchFailed(uint256 indexed launchId);
     event BatchSubmitted(uint64 indexed batchId, uint64 ts, uint256 fills);
 
     // ---------------------------------------------------------------------------------------------------------
@@ -127,6 +199,19 @@ contract Exchange is Ownable, ReentrancyGuard {
     error OrderDead();
     error Expired();
     error BadOrder();
+    error NotFactory();
+    error FeedNotEnabled();
+    error BadConfig();
+    error BadDuration();
+    error BadCut();
+    error TargetTooLow();
+    error UnknownLaunch();
+    error NotActive();
+    error NotInWindow();
+    error StaleOrFuturePrice();
+    error BadPrice();
+    error AlreadySnapped();
+    error AlreadyResolved();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
@@ -287,6 +372,123 @@ contract Exchange is Ownable, ReentrancyGuard {
         usedKeyNonce[k.owner][k.nonce] = true;
         keyExpiry[k.owner][k.key] = k.expiry;
         emit KeyAuthorized(k.owner, k.key, k.expiry);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Launches: registration, settlement snapshot, resolution
+    // ---------------------------------------------------------------------------------------------------------
+
+    /// @notice Called by the factory inside `Portal.newLauncher`. `rail` is the launch's Flap Launcher and `token` the
+    ///         memecoin address its salt predicts.
+    function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
+        external
+        returns (uint256 launchId)
+    {
+        if (msg.sender != factory) revert NotFactory();
+        if (!feedEnabled[c.feed]) revert FeedNotEnabled();
+        uint256 nameLen = bytes(c.name).length;
+        uint256 symLen = bytes(c.symbol).length;
+        if (
+            c.strike == 0 || nameLen == 0 || nameLen > 32 || symLen == 0 || symLen > 10 || rail == address(0)
+                || creator == address(0)
+        ) revert BadConfig();
+        if (c.settleTime < block.timestamp + MIN_DURATION || c.settleTime > block.timestamp + MAX_DURATION) {
+            revert BadDuration();
+        }
+        uint16 cut = c.cutBps;
+        if (cut < 1000 || cut > 3000 || cut % 500 != 0) revert BadCut();
+        if (c.target < minTarget) revert TargetTooLow();
+
+        launchId = _launches.length;
+        LaunchView storage l = _launches.push();
+        l.creator = creator;
+        l.rail = rail;
+        l.feed = c.feed;
+        l.strike = c.strike;
+        l.settleTime = c.settleTime;
+        l.createdAt = uint64(block.timestamp);
+        l.cutBps = cut;
+        l.target = c.target;
+        l.token = token;
+        l.name = c.name;
+        l.symbol = c.symbol;
+        l.imageURI = c.imageURI;
+        emit LaunchCreated(
+            launchId, creator, rail, token, c.feed, c.strike, c.settleTime, cut, c.target, c.name, c.symbol, c.imageURI
+        );
+    }
+
+    /// @notice Record the settlement price. Window `[settleTime, settleTime + GRACE]`; the feed must not have updated
+    ///         more than SNAP_TOLERANCE after settleTime. First accepted call wins.
+    function snapshot(uint256 id) external {
+        LaunchView storage l = _launch(id);
+        if (l.status != ACTIVE || l.resolved) revert NotActive();
+        if (l.snapped) revert AlreadySnapped();
+        uint256 st = l.settleTime;
+        if (block.timestamp < st || block.timestamp > st + GRACE) revert NotInWindow();
+        (, int256 answer,, uint256 updatedAt,) = ISingleFeed(l.feed).latestRoundData();
+        if (updatedAt > st + SNAP_TOLERANCE) revert StaleOrFuturePrice();
+        if (answer <= 0) revert BadPrice();
+        l.snapped = true;
+        l.settlePrice = uint256(answer);
+        l.settleUpdatedAt = uint64(updatedAt);
+        emit Snapshot(id, uint256(answer), uint64(updatedAt));
+    }
+
+    /// @notice Settle the market: after settleTime + MAX_LAG (every batch stamped before settleTime has landed), and
+    ///         once snapped or the snapshot window has closed.
+    function resolve(uint256 id) external {
+        LaunchView storage l = _launch(id);
+        if (l.resolved) revert AlreadyResolved();
+        uint256 st = l.settleTime;
+        if (block.timestamp < st + MAX_LAG || (!l.snapped && block.timestamp <= st + GRACE)) revert TooEarly();
+        l.resolved = true;
+        uint128 pairs = l.pairs;
+        uint8 outcome;
+        if (!l.snapped) {
+            outcome = VOID;
+            l.status = FAILED;
+        } else {
+            outcome = l.settlePrice >= l.strike ? UP : DOWN;
+            l.totalLoserShares = pairs;
+            uint256 raised = uint256(pairs) * l.cutBps / 10_000;
+            if (raised >= l.target) {
+                l.raised = raised;
+                l.status = GRADUATING;
+                emit Graduating(id);
+            } else {
+                l.status = FAILED;
+            }
+        }
+        l.outcome = outcome;
+        if (l.status == FAILED) emit LaunchFailed(id);
+        emit Resolved(id, outcome, pairs, l.raised);
+    }
+
+    function launchCount() external view returns (uint256) {
+        return _launches.length;
+    }
+
+    function getLaunch(uint256 id) external view returns (LaunchView memory) {
+        return _launches[id];
+    }
+
+    function isTradable(uint256 id, uint64 ts) public view returns (bool) {
+        if (id >= _launches.length) return false;
+        LaunchView storage l = _launches[id];
+        return l.status == ACTIVE && !l.resolved && ts < l.settleTime;
+    }
+
+    /// @notice `pairs x cut / 10000` while unresolved (what resolution would raise now); the final `raised` after.
+    function projectedRaised(uint256 id) external view returns (uint256) {
+        LaunchView storage l = _launch(id);
+        if (l.resolved) return l.raised;
+        return uint256(l.pairs) * l.cutBps / 10_000;
+    }
+
+    function _launch(uint256 id) internal view returns (LaunchView storage) {
+        if (id >= _launches.length) revert UnknownLaunch();
+        return _launches[id];
     }
 
     // ---------------------------------------------------------------------------------------------------------
