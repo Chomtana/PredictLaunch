@@ -31,6 +31,12 @@ pub struct ChainInfo {
     pub quote_token: Address,
     /// The quote token's on-chain symbol ("BNB" for native).
     pub quote_symbol: String,
+    /// `Exchange.challengeWindow()` (DEFAULT_CHALLENGE_WINDOW if the view is missing).
+    pub challenge_window: u64,
+    /// `Exchange.resolver()` (address(0) if unset or missing).
+    pub resolver: Address,
+    /// The address this sequencer sends transactions from.
+    pub operator: Address,
 }
 
 pub trait Chain: Send + Sync + 'static {
@@ -50,6 +56,13 @@ pub trait Chain: Send + Sync + 'static {
         users: Vec<Address>,
     ) -> impl Future<Output = anyhow::Result<B256>> + Send;
     fn graduate(&self, launch: u64) -> impl Future<Output = anyhow::Result<B256>> + Send;
+    /// Resolver: `proposeOutcome(launch, outcome, evidenceHash)` on a question launch.
+    fn propose_outcome(
+        &self,
+        launch: u64,
+        outcome: u8,
+        evidence_hash: B256,
+    ) -> impl Future<Output = anyhow::Result<B256>> + Send;
     /// `latestRoundData()` → (answer, updatedAt).
     fn read_feed(&self, feed: Address) -> impl Future<Output = anyhow::Result<(U256, u64)>> + Send;
     /// Dev faucet: `anvil_setBalance`.
@@ -98,6 +111,12 @@ const EVENTS: &[EventDef] = &[
     EventDef { name: "Redeemed", params: &["uint256", "address", "uint256", "uint256"] },
     EventDef { name: "TokensClaimed", params: &["uint256", "address", "uint256"] },
     EventDef { name: "BatchSubmitted", params: &["uint64", "uint64", "uint256"] },
+    EventDef { name: "QuestionSet", params: &["uint256", "string", "uint256"] },
+    EventDef {
+        name: "OutcomeProposed",
+        params: &["uint256", "uint8", "bytes32", "address", "bool"],
+    },
+    EventDef { name: "ChallengeWindowSet", params: &["uint64"] },
 ];
 
 fn signature(d: &EventDef) -> String {
@@ -294,6 +313,20 @@ pub fn decode_log(topics: &[B256], data: &[u8], block_ts: u64) -> Option<ChainEv
             fills: u64v(&p[2]),
             batch: None,
         },
+        "QuestionSet" => E::QuestionSet {
+            launch_id: u64v(&p[0]),
+            question: string(&p[1]),
+            market_id: u64v(&p[2]),
+        },
+        "OutcomeProposed" => E::OutcomeProposed {
+            launch_id: u64v(&p[0]),
+            outcome: u64v(&p[1]) as u8,
+            evidence_hash: p[2].as_word().unwrap_or_default(),
+            by: addr(&p[3]),
+            final_: p[4].as_bool().unwrap_or(false),
+            proposed_at: block_ts,
+        },
+        "ChallengeWindowSet" => E::ChallengeWindowSet { seconds: u64v(&p[0]) },
         _ => return None,
     })
 }
@@ -504,6 +537,20 @@ impl Chain for RpcChain {
         .await
     }
 
+    async fn propose_outcome(
+        &self,
+        launch: u64,
+        outcome: u8,
+        evidence_hash: B256,
+    ) -> anyhow::Result<B256> {
+        self.send(IExchange::proposeOutcomeCall {
+            id: U256::from(launch),
+            outcome,
+            evidenceHash: evidence_hash,
+        })
+        .await
+    }
+
     async fn read_feed(&self, feed: Address) -> anyhow::Result<(U256, u64)> {
         let r = self.view(feed, IAggregator::latestRoundDataCall {}).await?;
         Ok((r.answer.into_raw(), r.updatedAt.saturating_to()))
@@ -545,12 +592,24 @@ impl Chain for RpcChain {
                 .await
                 .context("reading the quote token's symbol")?
         };
+        // Exchanges deployed before question launches have neither view.
+        let challenge_window = self
+            .view(self.exchange, IExchange::challengeWindowCall {})
+            .await
+            .unwrap_or(bilauncher_core::DEFAULT_CHALLENGE_WINDOW);
+        let resolver = self
+            .view(self.exchange, IExchange::resolverCall {})
+            .await
+            .unwrap_or(Address::ZERO);
         Ok(ChainInfo {
             chain_id,
             salt_lock_fee,
             min_target,
             quote_token,
             quote_symbol,
+            challenge_window,
+            resolver,
+            operator: self.operator,
         })
     }
 }
@@ -568,6 +627,57 @@ mod tests {
         assert_eq!(get("Redeemed"), IExchange::Redeemed::SIGNATURE_HASH);
         assert_eq!(get("BatchSubmitted"), IExchange::BatchSubmitted::SIGNATURE_HASH);
         assert_eq!(get("WithdrawPaid"), IExchange::WithdrawPaid::SIGNATURE_HASH);
+        assert_eq!(get("QuestionSet"), IExchange::QuestionSet::SIGNATURE_HASH);
+        assert_eq!(get("OutcomeProposed"), IExchange::OutcomeProposed::SIGNATURE_HASH);
+        assert_eq!(get("ChallengeWindowSet"), IExchange::ChallengeWindowSet::SIGNATURE_HASH);
+    }
+
+    #[test]
+    fn decodes_question_events() {
+        let ev = IExchange::QuestionSet {
+            launchId: U256::from(4u64),
+            question: "Will it rain in Boston tomorrow?".into(),
+            marketId: U256::from(2849008u64),
+        };
+        let e = decode_log(&[IExchange::QuestionSet::SIGNATURE_HASH], &ev.encode_data(), 9).unwrap();
+        assert_eq!(
+            e,
+            ChainEvent::QuestionSet {
+                launch_id: 4,
+                question: "Will it rain in Boston tomorrow?".into(),
+                market_id: 2849008,
+            }
+        );
+        // launchId indexed, the rest in data.
+        let by = Address::repeat_byte(0x99);
+        let h = B256::repeat_byte(0xAB);
+        let data = DynSolValue::Tuple(vec![
+            DynSolValue::Uint(U256::from(1u64), 8),
+            DynSolValue::FixedBytes(h, 32),
+            DynSolValue::Address(by),
+            DynSolValue::Bool(true),
+        ])
+        .abi_encode_params();
+        let e = decode_log(
+            &[IExchange::OutcomeProposed::SIGNATURE_HASH, B256::from(U256::from(4u64))],
+            &data,
+            1234,
+        )
+        .unwrap();
+        assert_eq!(
+            e,
+            ChainEvent::OutcomeProposed {
+                launch_id: 4,
+                outcome: 1,
+                evidence_hash: h,
+                by,
+                final_: true,
+                proposed_at: 1234,
+            }
+        );
+        let ev = IExchange::ChallengeWindowSet { seconds_: 120 };
+        let e = decode_log(&[IExchange::ChallengeWindowSet::SIGNATURE_HASH], &ev.encode_data(), 0);
+        assert_eq!(e, Some(ChainEvent::ChallengeWindowSet { seconds: 120 }));
     }
 
     #[test]

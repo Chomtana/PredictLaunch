@@ -29,7 +29,16 @@ pub struct Inner {
     pub quote_token: Address,
     /// Quote-token mints by the dev faucet.
     pub quote_mints: HashMap<Address, U256>,
+    /// `info().challenge_window` (0 = DEFAULT_CHALLENGE_WINDOW).
+    pub challenge_window: u64,
+    /// `info().resolver`; `None` = the operator (`FAKE_OPERATOR`).
+    pub resolver: Option<Address>,
+    /// Make `propose_outcome` fail.
+    pub fail_propose: bool,
 }
+
+/// `info().operator` of the fake chain.
+pub const FAKE_OPERATOR: Address = Address::repeat_byte(0x0F);
 
 #[derive(Default)]
 pub struct FakeChain(pub Mutex<Inner>);
@@ -111,6 +120,15 @@ impl Chain for FakeChain {
     async fn graduate(&self, launch: u64) -> anyhow::Result<B256> {
         Ok(self.call(format!("graduate {launch}")))
     }
+    async fn propose_outcome(
+        &self,
+        launch: u64,
+        outcome: u8,
+        evidence_hash: B256,
+    ) -> anyhow::Result<B256> {
+        anyhow::ensure!(!self.0.lock().unwrap().fail_propose, "propose failed (fake)");
+        Ok(self.call(format!("propose {launch} {outcome} {evidence_hash}")))
+    }
     async fn read_feed(&self, feed: Address) -> anyhow::Result<(U256, u64)> {
         self.0
             .lock()
@@ -131,8 +149,18 @@ impl Chain for FakeChain {
         Ok(())
     }
     async fn info(&self) -> anyhow::Result<ChainInfo> {
-        let quote_token = self.0.lock().unwrap().quote_token;
+        let (quote_token, cw, resolver) = {
+            let i = self.0.lock().unwrap();
+            (i.quote_token, i.challenge_window, i.resolver)
+        };
         Ok(ChainInfo {
+            challenge_window: if cw == 0 {
+                bilauncher_core::DEFAULT_CHALLENGE_WINDOW
+            } else {
+                cw
+            },
+            resolver: resolver.unwrap_or(FAKE_OPERATOR),
+            operator: FAKE_OPERATOR,
             chain_id: 97,
             salt_lock_fee: U256::from(5_000_000_000_000_000u64),
             min_target: U256::from(2_150_000_000_000_000_000u64),
@@ -169,6 +197,27 @@ pub fn launch_event(id: u64, settle_time: u64, feed: Address) -> ChainEvent {
         image_uri: "https://example.invalid/c.png".into(),
         created_at: settle_time.saturating_sub(3600),
     }
+}
+
+/// A question launch: `LaunchCreated` (feed 0, strike 0) then `QuestionSet`.
+pub fn question_launch_events(
+    id: u64,
+    settle_time: u64,
+    question: &str,
+    market_id: u64,
+) -> Vec<ChainEvent> {
+    let mut e = launch_event(id, settle_time, Address::ZERO);
+    if let ChainEvent::LaunchCreated { strike, .. } = &mut e {
+        *strike = U256::ZERO;
+    }
+    vec![
+        e,
+        ChainEvent::QuestionSet {
+            launch_id: id,
+            question: question.into(),
+            market_id,
+        },
+    ]
 }
 
 pub fn deposit(user: Address, bnb: u128) -> ChainEvent {

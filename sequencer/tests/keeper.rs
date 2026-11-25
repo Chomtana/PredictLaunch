@@ -271,3 +271,145 @@ async fn keeper_runs_actions_against_chain() {
     app.run_keeper().await;
     assert_eq!(app.chain.calls().len(), 1);
 }
+
+// ------------------------------------------------------------------------- question launches
+
+use alloy_primitives::B256;
+use bilauncher_core::QUESTION_DEADLINE;
+use bilauncher_sequencer::keeper::{decide, proposals_due};
+
+fn proposed(id: u64, outcome: u8, at: u64, final_: bool) -> ChainEvent {
+    ChainEvent::OutcomeProposed {
+        launch_id: id,
+        outcome,
+        evidence_hash: B256::repeat_byte(0xEE),
+        by: Address::repeat_byte(0x0F),
+        final_,
+        proposed_at: at,
+    }
+}
+
+#[test]
+fn question_launch_is_never_snapshotted() {
+    let s = state_with(question_launch_events(0, T, "Will it rain?", 7));
+    for now in [T, T + 1, T + GRACE, T + GRACE + 1] {
+        assert!(
+            !keeper_actions(&s, now).contains(&KeeperAction::Snapshot(0)),
+            "at {now}"
+        );
+    }
+}
+
+#[test]
+fn unproposed_question_voids_only_after_deadline() {
+    let s = state_with(question_launch_events(0, T, "Will it rain?", 7));
+    // Unlike a price launch, the grace window does not make it resolvable.
+    assert!(keeper_actions(&s, T + GRACE + 1).is_empty());
+    assert!(keeper_actions(&s, T + QUESTION_DEADLINE).is_empty());
+    assert_eq!(
+        keeper_actions(&s, T + QUESTION_DEADLINE + 1),
+        vec![KeeperAction::Resolve(0)]
+    );
+}
+
+#[test]
+fn proposed_question_resolves_after_challenge_window() {
+    let mut s = state_with(question_launch_events(0, T, "Will it rain?", 7));
+    s.challenge_window = 120;
+    let p = T + MAX_LAG + 5;
+    s.apply_events(vec![proposed(0, 0, p, false)], p * 1000);
+    assert!(keeper_actions(&s, p + 119).is_empty());
+    assert_eq!(keeper_actions(&s, p + 120), vec![KeeperAction::Resolve(0)]);
+    // Past the deadline a pending proposal still waits for its window.
+    s.challenge_window = 7 * 86_400;
+    assert!(keeper_actions(&s, T + QUESTION_DEADLINE + 10).is_empty());
+}
+
+#[test]
+fn final_override_resolves_at_once() {
+    let mut s = state_with(question_launch_events(0, T, "Will it rain?", 7));
+    let p = T + MAX_LAG;
+    s.apply_events(vec![proposed(0, 2, p, true)], p * 1000);
+    assert_eq!(keeper_actions(&s, p), vec![KeeperAction::Resolve(0)]);
+}
+
+#[test]
+fn question_launch_redeems_and_graduates_like_price() {
+    let mut s = state_with(question_launch_events(0, T, "Will it rain?", 7));
+    s.apply_events(
+        vec![
+            ChainEvent::Resolved {
+                launch_id: 0,
+                outcome: 0,
+                pairs: U256::from(E18),
+                raised: U256::from(3 * E18),
+            },
+            ChainEvent::Graduating { launch_id: 0 },
+        ],
+        (T + 20) * 1000,
+    );
+    assert_eq!(keeper_actions(&s, T + 20), vec![KeeperAction::Graduate(0)]);
+}
+
+#[test]
+fn proposals_due_rule() {
+    let mut ev = question_launch_events(0, T, "Will it rain?", 7);
+    ev.extend(question_launch_events(1, T, "Will it snow?", 0));
+    ev.push(launch_event(2, T, FEED));
+    let mut s = state_with(ev);
+    assert!(proposals_due(&s, T + MAX_LAG - 1).is_empty());
+    // Price launches never; question launches with or without a market.
+    assert_eq!(proposals_due(&s, T + MAX_LAG), vec![0, 1]);
+    s.apply_events(
+        vec![proposed(0, 1, T + MAX_LAG, false)],
+        (T + MAX_LAG) * 1000,
+    );
+    assert_eq!(proposals_due(&s, T + MAX_LAG + 1), vec![1]);
+    s.apply_events(
+        vec![
+            ChainEvent::Resolved {
+                launch_id: 1,
+                outcome: 2,
+                pairs: U256::ZERO,
+                raised: U256::ZERO,
+            },
+            ChainEvent::LaunchFailed { launch_id: 1 },
+        ],
+        (T + MAX_LAG + 2) * 1000,
+    );
+    assert!(proposals_due(&s, T + MAX_LAG + 3).is_empty());
+}
+
+#[test]
+fn decision_thresholds() {
+    assert_eq!(decide(0.97), Some(0));
+    assert_eq!(decide(0.999), Some(0));
+    assert_eq!(decide(1.0), Some(0));
+    assert_eq!(decide(0.9699), None);
+    assert_eq!(decide(0.5), None);
+    assert_eq!(decide(0.0301), None);
+    assert_eq!(decide(0.03), Some(1));
+    assert_eq!(decide(0.0), Some(1));
+    assert_eq!(decide(f64::NAN), None);
+}
+
+#[tokio::test]
+async fn keeper_propose_action_calls_chain() {
+    let chain = FakeChain::new();
+    let app = App::new(chain, settings()).await.unwrap();
+    let a = KeeperAction::Propose(3, 1, B256::repeat_byte(0xAB));
+    assert_eq!(a.launch(), 3);
+    assert!(app.execute(&a).await.is_ok());
+    assert_eq!(
+        app.chain.calls(),
+        vec![format!("propose 3 1 {}", B256::repeat_byte(0xAB))]
+    );
+}
+
+#[tokio::test]
+async fn app_reads_challenge_window_from_chain() {
+    let chain = FakeChain::new();
+    chain.0.lock().unwrap().challenge_window = 120;
+    let app = App::new(chain, settings()).await.unwrap();
+    assert_eq!(app.state.lock().unwrap().challenge_window, 120);
+}

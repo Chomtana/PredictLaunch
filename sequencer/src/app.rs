@@ -73,10 +73,11 @@ impl<C: Chain> App<C> {
     /// Connect, read the config views and replay every Exchange event since `start_block`.
     pub async fn new(chain: C, settings: Settings) -> anyhow::Result<Arc<Self>> {
         let info = chain.info().await.context("reading chain info")?;
-        let state = State::new(Config {
+        let mut state = State::new(Config {
             domain: settings.domain,
             batch_ms: settings.batch_ms,
         });
+        state.challenge_window = info.challenge_window;
         let start = settings.start_block;
         let app = Arc::new(App {
             chain,
@@ -176,6 +177,17 @@ impl<C: Chain> App<C> {
         }
     }
 
+    /// Send one keeper action to the chain.
+    pub async fn execute(&self, a: &KeeperAction) -> anyhow::Result<B256> {
+        match a {
+            KeeperAction::Snapshot(l) => self.chain.snapshot(*l).await,
+            KeeperAction::Resolve(l) => self.chain.resolve(*l).await,
+            KeeperAction::Redeem(l, users) => self.chain.redeem(*l, users.clone()).await,
+            KeeperAction::Graduate(l) => self.chain.graduate(*l).await,
+            KeeperAction::Propose(l, outcome, h) => self.chain.propose_outcome(*l, *outcome, *h).await,
+        }
+    }
+
     /// Run every keeper action due now, in order.
     pub async fn run_keeper(&self) -> Vec<(KeeperAction, anyhow::Result<B256>)> {
         let _g = self.keeper_lock.lock().await;
@@ -196,12 +208,7 @@ impl<C: Chain> App<C> {
             {
                 continue;
             }
-            let r = match &a {
-                KeeperAction::Snapshot(l) => self.chain.snapshot(*l).await,
-                KeeperAction::Resolve(l) => self.chain.resolve(*l).await,
-                KeeperAction::Redeem(l, users) => self.chain.redeem(*l, users.clone()).await,
-                KeeperAction::Graduate(l) => self.chain.graduate(*l).await,
-            };
+            let r = self.execute(&a).await;
             match &r {
                 Ok(tx) => {
                     tracing::info!("keeper {a:?}: {tx}");
