@@ -43,11 +43,15 @@ scripts/     dev.sh (fork demo), e2e.sh
   (`LauncherBase`, `LauncherFactoryBase`, `LauncherHelper`, `LaunchExtensionHelper`, `ILauncher`,
   `IPortal`, `IStrategy`, `Distribution`, `IVaultSchemas`, `LaunchVaultAddresses`). The reference
   pair is `src/launcher/MintLauncher.sol` + `MintLauncherFactory.sol` (beacon proxy per launch).
-- Timing: `SNAP_TOLERANCE = 5 s`, `GRACE = 60 s`, `MAX_LAG = 15 s`, `FORCE_DELAY = 600 s`; rounds
-  align to wall clock (`startTime = (now / interval + 1) * interval`).
-- Intervals: 300, 900, 3600, 86400 s, as a bitmask `1=5m 2=15m 4=1h 8=1d`. Fast feeds (BTCB, BNB,
-  ANKR) mask `15`; slow feeds mask `12`. The feed list and addresses are in the spec's feed table.
-  FDUSD and VAI are excluded.
+- **Market model (changed 2026-11-25, user's decision): one binary market per launch.** The creator
+  sets a **strike** (price to beat, same 18-decimal units as the feed's `answer`) and a **settlement
+  time**. Up (outcome 0) wins iff the settlement price ≥ strike; otherwise Down (outcome 1) wins.
+  No recurring rounds. `Order.round` stays in the EIP-712 type for vector stability and **must be
+  0**.
+- Timing: `SNAP_TOLERANCE = 5 s`, `GRACE = 60 s`, `MAX_LAG = 15 s`, `FORCE_DELAY = 600 s`;
+  `MIN_DURATION = 300 s`, `MAX_DURATION = 30 days` (settleTime − creation time).
+- Feeds: any enabled feed (the spec's feed table: BTCB, BNB, ANKR and the slow feeds; FDUSD and VAI
+  excluded). `setFeed(feed, enabled)`.
 - Atlas feed state: storage slot `0x32` = `updatedAt(uint48) | startedAt(uint48) | answer(uint80)`,
   high bits to low.
 - EIP-712 domain: `name "bilauncher"`, `version "1"`, `chainId 97`, `verifyingContract = Exchange`.
@@ -76,7 +80,7 @@ constructor(address owner);
 // admin (owner)
 function setFactory(address factory) external;                       // the only address allowed to registerLaunch
 function setOperator(address op, bool on) external;
-function setFeed(address feed, uint8 intervalMask) external;         // mask 0 = disabled
+function setFeed(address feed, bool enabled) external;
 function setMinTarget(uint256 bnb) external;                         // default 2.15 ether
 
 // funds
@@ -91,19 +95,18 @@ function revokeKey(address key) external;
 function cancelOrder(Order calldata o) external;                     // owner only
 function bumpMinNonce(uint64 minNonce) external;                     // orders with nonce < minNonce are dead
 
-// launches and rounds
-struct LaunchConfig { string name; string symbol; string imageURI; address feed; uint32 interval;
-                      uint16 cutBps; uint256 target; uint64 deadline; bytes32 salt; }
+// launches (one binary market each)
+struct LaunchConfig { string name; string symbol; string imageURI; address feed; uint256 strike;
+                      uint64 settleTime; uint16 cutBps; uint256 target; bytes32 salt; }
 // Users create a launch with Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig)).
 // The factory deploys a BilauncherLauncher (beacon proxy), whose initialize locks the salt, then calls:
 function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
     external returns (uint256 launchId);                             // onlyFactory; validates c (see rules)
-function snapshot(uint256 launchId, uint32 boundary) external;       // boundary k at startTime + k*interval
-function resolve(uint256 launchId, uint32 round) external;           // sequential: round-1 must be resolved
-function redeem(uint256 launchId, uint32 round, address[] calldata users) external;
+function snapshot(uint256 launchId) external;                        // settlement price, window [settleTime, settleTime+GRACE]
+function resolve(uint256 launchId) external;                         // after settleTime+MAX_LAG -> Graduating | Failed
+function redeem(uint256 launchId, address[] calldata users) external;
 function graduate(uint256 launchId) external;                        // Graduating -> Graduated: ILaunchRail(rail).launch{value: raised}(launchId)
 function receiveLoserTokens(uint256 launchId, address token, uint256 amount) external; // rail only: pulls 500M
-function refundHaircut(uint256 launchId) external;                   // Failed launches, caller's own
 function claimTokens(uint256 launchId) external;                     // Graduated launches, incremental
 
 // batches
@@ -116,18 +119,19 @@ function submitBatch(Batch calldata b) external;                     // onlyOper
 // views
 function launchCount() external view returns (uint256);
 function getLaunch(uint256 id) external view returns (LaunchView memory);
-function roundInfo(uint256 id, uint32 round) external view returns (RoundView memory);
-function isTradable(uint256 id, uint32 round, uint64 ts) external view returns (bool);
+function isTradable(uint256 id, uint64 ts) external view returns (bool);
+function projectedRaised(uint256 id) external view returns (uint256); // pairs × cut / 10000 while Active
 function balanceOf(address u) external view returns (uint256);
-function position(uint256 id, uint32 round, address u) external view returns (uint128 up, uint128 down);
+function position(uint256 id, address u) external view returns (uint128 up, uint128 down);
 function filled(bytes32 orderHash) external view returns (uint128);
 function orderHash(Order calldata o) external view returns (bytes32);
 function withdrawQueueLength() external view returns (uint64);
 function withdrawProcessed() external view returns (uint64);
 ```
-`LaunchView { creator, rail, feed, interval, cutBps, startTime, deadline, target, raised, status
-(0 Active, 1 Graduating, 2 Graduated, 3 Failed), token, totalLoserShares, lastResolved (rounds
-resolved count), name, symbol, imageURI }`.
+`LaunchView { creator, rail, feed, strike, settleTime, createdAt, cutBps, target, pairs, raised,
+status (0 Active, 1 Graduating, 2 Graduated, 3 Failed), outcome (0 Up, 1 Down, 2 Void; valid once
+resolved), settlePrice, settleUpdatedAt, snapped, resolved, token, totalLoserShares, name, symbol,
+imageURI }`.
 
 ### Rail and Flap contracts
 
@@ -139,7 +143,7 @@ constructor(address hub, address guardian, address exchange);
 // _newLauncher(creator, data): c = abi.decode(data, (LaunchConfig)); deploy BeaconProxy;
 //   BilauncherLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
 //   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); BilauncherLauncher(l).setLaunchId(id)
-// launcherDataSchema(): fields name, symbol, imageURI, feed, interval, cutBps, target, deadline, salt
+// launcherDataSchema(): fields name, symbol, imageURI, feed, strike, settleTime, cutBps, target, salt
 
 // contracts/src/flap/BilauncherLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
 function initialize(address hub, address creator, address exchange, LaunchConfig calldata c) external payable; // once
@@ -148,24 +152,20 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 // after the Portal call returns, launch() approves and calls exchange.receiveLoserTokens(launchId, token, 500M)
 // _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "bilauncher prediction launch"
 ```
-`RoundView { startTime, endTime, startPrice, endPrice, startSet, endSet, resolved, outcome (0 Up,
-1 Down, 2 Void), pairs }`.
-
 **Rules the contract enforces** (from the spec; one line each):
-- Tradable(id, k, ts): status Active ∧ start_k < deadline ∧ start_k ≤ ts < end_k ∧ snapSet[k] ∧
-  (k == 0 ∨ resolved[k−1]).
-- `snapshot`: block.timestamp ∈ [t, t + GRACE], `updatedAt ≤ t + SNAP_TOLERANCE`, answer > 0, first
-  accepted call wins.
-- `resolve(k)`: resolved[k−1] (or k == 0), block.timestamp ≥ end + MAX_LAG, and (endSet ∨
-  block.timestamp > end + GRACE). Outcome: Void if either snap is missing; else Up iff end ≥ start.
-  Non-void: `raised += pairs × cut / 10000` (if not Failed), `totalLoserShares += pairs`. Then
-  `raised ≥ target` → Graduating; else if `end_k ≥ deadline` → Failed.
-- `redeem`: Up/Down winner credit `win × (10000 − cut) / 10000` and `haircutPaid += win × cut /
-  10000` (Failed launch: credit `win` in full); loser `loserShares += lose`; Void: credit
-  `(up + down) / 2`. Clears the position. Idempotent per user.
-- `registerLaunch` (factory only): feed enabled and interval in its mask, cut in the allowed set,
-  `target ≥ minTarget`, `deadline > startTime + interval`, name 1–32 bytes, symbol 1–10 bytes;
-  `startTime = (now / interval + 1) * interval`.
+- `registerLaunch` (factory only): feed enabled, `strike > 0`, `settleTime − now ∈ [MIN_DURATION,
+  MAX_DURATION]`, cut in the allowed set, `target ≥ minTarget`, name 1–32 bytes, symbol 1–10 bytes.
+- Tradable(id, ts): status Active ∧ ts < settleTime.
+- `snapshot(id)`: block.timestamp ∈ [settleTime, settleTime + GRACE], feed `updatedAt ≤ settleTime +
+  SNAP_TOLERANCE`, answer > 0, first accepted call wins (stores settlePrice, settleUpdatedAt).
+- `resolve(id)`: block.timestamp ≥ settleTime + MAX_LAG and (snapped ∨ block.timestamp > settleTime
+  + GRACE). Outcome: Void if not snapped; else Up iff settlePrice ≥ strike. Non-void: `raised =
+  pairs × cut / 10000`, `totalLoserShares = pairs`; then `raised ≥ target` → Graduating, else →
+  Failed (raised = 0: nothing is held back). Void → Failed.
+- `redeem` (permissionless, idempotent per user, clears the position): Void → `(up + down) / 2`.
+  Graduating/Graduated → winner credit `win × (10000 − cut) / 10000`, loser `loserShares += lose`.
+  Failed (non-void) → winner credit `win` in full (the user's rule: a failed launch pays winners
+  1.00).
 - `graduate`: `ILaunchRail(rail).launch{value: raised}(id)`; the rail must call
   `receiveLoserTokens` for exactly `LOSER_SUPPLY` before returning, or `graduate` reverts.
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
@@ -174,7 +174,7 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any failed check
   reverts the whole batch.
 - Fill checks: both orders' signatures, not cancelled, `nonce ≥ minNonce[owner]`,
-  `expiry ≥ ts`, same launch + round, tradable at ts, `amount % 1e16 == 0`,
+  `expiry ≥ ts`, same launch, `round == 0`, tradable at ts, `amount % 1e16 == 0`,
   `filled + amount ≤ order.amount` for both. Prices: maker gets exactly `pm`. Transfer: same
   outcome, opposite sides, taker buy ⇒ `pm ≤ pt`, taker sell ⇒ `pm ≥ pt`. Mint: both Buy, opposite
   outcomes, `pt + pm ≥ 100`, taker pays `100 − pm`, `pairs += amount`. Merge: both Sell, opposite
@@ -183,28 +183,28 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 **Events** (the sequencer indexes these): `Deposited(user, amount)`, `WithdrawRequested(idx, user,
 amount)`, `WithdrawPaid(idx, user, requested, paid)`, `KeyAuthorized(owner, key, expiry)`,
 `KeyRevoked(owner, key)`, `OrderCancelled(owner, orderHash)`, `MinNonceBumped(owner, minNonce)`,
-`LaunchCreated(launchId, creator, feed, interval, cutBps, target, deadline, startTime, token, name,
-symbol, imageURI)`, `Snapshot(launchId, boundary, price, updatedAt)`, `RoundResolved(launchId,
-round, outcome, pairs, raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`,
-`LaunchFailed(launchId)`, `Redeemed(launchId, round, user, credit, loserShares)`,
-`TokensClaimed(launchId, user, amount)`, `HaircutRefunded(launchId, user, amount)`,
-`BatchSubmitted(batchId, ts, fills)`, `Trade(launchId, round, takerHash, makerHash, kind,
-makerPrice, amount)`.
+`LaunchCreated(launchId, creator, rail, token, feed, strike, settleTime, cutBps, target, name,
+symbol, imageURI)`, `Snapshot(launchId, price, updatedAt)`, `Resolved(launchId, outcome, pairs,
+raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`, `LaunchFailed(launchId)`,
+`Redeemed(launchId, user, credit, loserShares)`, `TokensClaimed(launchId, user, amount)`,
+`BatchSubmitted(batchId, ts, fills)`, `Trade(launchId, takerHash, makerHash, kind, makerPrice,
+amount)`.
 
 ### Sequencer HTTP/WS API (default port 8787; JSON; amounts are decimal strings in wei)
 
 ```
 GET  /api/status            {lastBatchId, lastBatchTs, pendingFills, inflight:bool, softReversals}
 GET  /api/config            {chainId, rpc, exchange, factory, portal, saltLockFee, minTarget, cuts:[1000..3000],
-                             feeds:[{address, symbol, intervals:[300,...], fast:bool}], batchMs}
-GET  /api/launches          [LaunchSummary]   (launch fields + liveRound, upPrice (best mid, cents|null), progress)
-GET  /api/launch/:id        LaunchDetail      (LaunchSummary + rounds: last 20 RoundView + current/next times)
-GET  /api/book/:id/:round   {bids:[{price, amount}], asks:[...]}   Up terms, price cents, best first
-GET  /api/trades/:id?limit= [{round, price (Up terms), amount, side:"buy"|"sell" (taker, Up terms), ts}]
+                             feeds:[{address, symbol}], minDuration, maxDuration, batchMs}
+GET  /api/launches          [LaunchSummary]   (LaunchView fields + upPrice (best mid, cents|null),
+                                               projectedRaised, progress = raised-or-projected / target)
+GET  /api/launch/:id        LaunchDetail      (LaunchSummary + currentPrice, lastTrades)
+GET  /api/book/:id          {bids:[{price, amount}], asks:[...]}   Up terms, price cents, best first
+GET  /api/trades/:id?limit= [{price (Up terms), amount, side:"buy"|"sell" (taker, Up terms), ts}]
 GET  /api/prices/:feed?since=unixSec  [{t, price}]   price = 18-dec decimal string
 GET  /api/user/:addr        {balance, locked, pendingWithdrawals:[...], orders:[OrderView],
-                             positions:[{launchId, round, up, down}], launches:[{launchId, loserShares,
-                             claimableTokens, haircutPaid}]}
+                             positions:[{launchId, up, down}], launches:[{launchId, loserShares,
+                             claimableTokens}]}
 POST /api/msgs              body: [Msg] (atomic group, ≤ 16). Msg =
                              {kind:"place", order:{...all Order fields as strings}, sig, ifResting?:false}
                            | {kind:"cancel", owner, orderHash, nonce, sig, ifResting?:bool}
@@ -212,7 +212,7 @@ POST /api/msgs              body: [Msg] (atomic group, ≤ 16). Msg =
                             → 200 {results:[{orderHash?, fills:[{price, amount, kind}], resting:amount}]}
                             → 400 {error:"code", message, index}
 POST /api/faucet            {address} → anvil_setBalance(address, 1000 BNB)   (only with --dev-faucet)
-WS   /ws                    client sends {sub:{launchId?, round?, user?}};
+WS   /ws                    client sends {sub:{launchId?, user?}};
                             server pushes {type:"snapshot", launch?, book?, trades?, user?} on change and
                             {type:"price", feed, t, price} per tick
 ```

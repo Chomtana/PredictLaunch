@@ -2,6 +2,17 @@
 
 Date: 2026-11-25. Status: ready for approval (builder check done).
 
+
+> **Change 2026-11-25 (user's decision): one market per launch.** Recurring Up/Down rounds were
+> replaced. The creator sets a **strike** (price to beat) and a **settlement time** (5 min to 30
+> days out). Up wins iff the Atlas price at settlement ≥ strike. At settlement: `raised = cut ×
+> open pairs`; if ≥ target, the coin graduates through Flap and losers claim it; otherwise the
+> launch fails and winners are paid 1.00. A missing settlement snapshot voids the market (0.50 each).
+> The "Rounds" section, the per-feed interval rules and the separate deadline below are superseded;
+> SPEC.md is authoritative. Why: it removes the riskiest machinery (round boundaries, sequential
+> resolution, per-round pauses), gives creators a meme narrative ("$MOON if BNB ≥ $1,000 by
+> Friday"), and makes graduation one dramatic demo moment.
+
 ## Intent
 
 A hackathon pivot from biliquid (`../../biliquid`, a ZK-proven spot orderbook on BSC). The secret

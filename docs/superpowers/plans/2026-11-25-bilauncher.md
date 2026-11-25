@@ -23,6 +23,58 @@ tokio), React 19 + Vite 8 + viem 2 + lightweight-charts 5, Node ≥ 23 scripts
 **Spec:** `docs/superpowers/specs/2026-11-25-bilauncher-design.md` (read it first). Reference
 code to adapt: `../biliquid` (`contracts/`, `sequencer/`, `frontend/`, `scripts/dev.sh`, `SPEC.md`).
 
+
+## ⚠ Amendment A1 (2026-11-25): one market per launch (creator strike + settlement time)
+
+**This overrides every task below wherever they mention rounds.** SPEC.md is already updated; it wins
+over any text here. The user replaced recurring Up/Down rounds with: the creator sets a **strike**
+and a **settleTime**; Up wins iff the Atlas price at settlement ≥ strike. One order book per launch.
+Unchanged: funds, withdrawals, trading keys, EIP-712 (`Order.round` must be 0), signed orders, batch
+fills (transfer/mint/merge), Flap factory/launcher rail, graduation, loser claims, the API style.
+
+Per-track changes:
+- **C1, C2:** unchanged (`setFeed(address,bool)`).
+- **C3 → "Launch registration, settlement snapshot, resolution":** tests become
+  `test_registerValidates` (non-factory, unlisted feed, strike 0, duration < 300 s or > 30 days,
+  cut 1200, target < minTarget), `test_snapshotWindow` (same window rules at `settleTime`),
+  `test_resolveOutcomes` (price == strike → Up; below → Down; raised = pairs × cut; ≥ target →
+  Graduating, else Failed), `test_missedSnapshotVoids` (no snapshot → resolvable after
+  settleTime+GRACE, Void, Failed), `test_tradableUntilSettle` (ts < settleTime only, not after
+  resolve).
+- **C4:** `test_fillAtOrAfterEndReverts` → `test_fillAtOrAfterSettleReverts` (ts == settleTime
+  reverts, settleTime−1 passes); `round != 0` reverts (add to `test_rejectsBadOrders`).
+- **C5:** remove `refundHaircut`/`haircutPaid`; `test_redeemAfterFailurePaysFull` = a non-void
+  market whose raised < target pays winners 1.00; `test_incrementalClaimsSumToLoserSupply` uses one
+  market with 3 losers claiming before and after other losers redeem.
+- **C6:** the fork test drives the BTCB slot `0x32` once at settlement.
+- **S2:** a book per launch (not per round).
+- **S3:** a fill joins a batch only if `batch.ts < settleTime` of its launch; cut the open batch
+  at any settleTime; drop resting orders at settleTime. Tests `cuts_batch_at_settle_time`,
+  `no_fill_at_or_after_settle`, `orders_dropped_at_settle` replace the round ones.
+- **S4 keeper:** `snapshot(id)` at the first block ≥ settleTime (retry until +GRACE), `resolve(id)`
+  after +MAX_LAG, then redeem all holders, then `graduate` if Graduating. Tests
+  `keeper_snapshots_at_settle`, `keeper_resolves_after_lag`, `keeper_redeems_all_holders`,
+  `keeper_graduates`, `failed_batch_restores_state`.
+- **S5:** API shapes per the updated SPEC (no `:round`; config feeds without intervals).
+- **F2 create form:** name, symbol, image URL, feed, **strike** (prefilled with the feed's current
+  price, shown in USD), **settlement date/time** (≥ now + 5 min, ≤ 30 days), cut, target. No interval
+  or deadline. The card shows "BTC ≥ $100,000 by Nov 26 12:00", a countdown, and projected-raised
+  progress.
+- **F3 trading page:** the title is the question ("Will BTC be ≥ $100,000 at Nov 26, 12:00?"),
+  "Price to beat" = strike, current price with its delta vs strike, a countdown to settlement, and a
+  chart with a dashed strike line. **No round strip.** Projected pool = cut × open pairs. After
+  settlement: "Settling…" until resolved.
+- **F4:** drop the haircut refund. Failed: "Target not reached: winners were paid in full." Void:
+  "No settlement price: everyone redeemed at 0.50."
+- **I1 seed:** 2 launches, e.g. BTCB strike = current price, settle in 15 min, cut 10%, target
+  2.15; and BNB strike = current +1%, settle in 30 min, cut 30%, target 3. The bots quote
+  `pUp = Φ((price − strike) / (σ·price·sqrt(timeLeft)))` (σ a constant).
+- **I2 e2e:** a launch settling 10 min out; bots mint ≥ 22 BNB of pairs before settlement →
+  graduation.
+- **Review Focus 1/2** now read "settlement time" instead of "round boundary/round".
+
+---
+
 ## Execution layout (user's instruction: parallel agents, no nesting)
 
 ```
