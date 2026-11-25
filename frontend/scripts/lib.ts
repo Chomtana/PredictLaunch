@@ -137,6 +137,20 @@ export function setup(rpc: string, api: string, deployPath: string) {
     return { owner: acct.address, acct, key, resting: new Map() }
   }
 
+  /** Keep a bot trading: when its free Exchange balance drops below `min`, refill the wallet and deposit `amount`. */
+  async function topUp(b: Bot, min = 100n * E18, amount = 200n * E18) {
+    const u = await get<{ free?: string; balance: string }>(`/api/user/${b.owner}`)
+    if (BigInt(u.free ?? u.balance) >= min) return false
+    try {
+      await post('/api/faucet', { address: b.owner })
+    } catch {
+      await pc.request({ method: 'anvil_setBalance' as never, params: [b.owner, '0x' + parseEther('1000').toString(16)] as never })
+    }
+    await send(b.acct, { address: deploy.exchange, abi: exchangeAbi, functionName: 'deposit', value: amount })
+    await post('/api/poke')
+    return true
+  }
+
   interface PlaceResult {
     orderHash?: Hex
     fills: { price: number; amount: string; kind: number | string }[]
@@ -185,7 +199,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, get, post, send, chainNow, feedPrice, createLaunch, makeBot, place, cancelAll }
+  return { deploy, chain, pc, D, get, post, send, chainNow, feedPrice, createLaunch, makeBot, topUp, place, cancelAll }
 }
 
 export interface Bot {

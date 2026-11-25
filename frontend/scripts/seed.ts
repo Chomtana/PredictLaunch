@@ -105,6 +105,7 @@ async function main() {
         continue
       }
       tick++
+      if (tick % 10 === 0) for (const b of [maker, ...takers]) if (await S.topUp(b)) console.log(`seed: topped up ${b.owner}`)
       for (const m of open) {
         const f = await fair(m)
         if (tick % 3 === 0) await quote(maker, m, f)
