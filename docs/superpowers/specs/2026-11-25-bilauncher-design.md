@@ -131,18 +131,28 @@ The user picked B.
 ### Rounds
 
 - Round k of a launch covers `[start + k·interval, start + (k+1)·interval)`.
-- **Price snapshots.** At each boundary t, the keeper (the sequencer; also callable by anyone) calls
-  `snapshot(launchId, k)` within `GRACE = 60 s` after t. The contract reads `latestRoundData` and
-  stores `answer`. Round k's end price is the snapshot at its end boundary, which is also round
-  k+1's start price ("price to beat").
+- **Price snapshots.** At each boundary t, `snapshot(launchId, k)` (callable by anyone; the keeper
+  calls it in the first block at or after t) reads `latestRoundData` and stores `answer`. The read
+  is accepted only if `updatedAt <= t + SNAP_TOLERANCE` (5 s) and `block.timestamp <= t + GRACE`
+  (60 s). The first accepted call wins. *(Builder-check call: this caps how far anyone, the
+  sequencer included, can pick a favourable price to about 5 s after the boundary.)* Round k's end
+  price is the snapshot at its end boundary, which is also round k+1's start price ("price to
+  beat").
 - **Outcome**: Up if `endPrice >= startPrice`, else Down.
-- **Void**: if either snapshot was missed (no call within GRACE), the round is void. Every share,
-  Up or Down, redeems at 0.50, with no haircut, no pool contribution and no loser shares.
-- **Tradable** only while live: `startTime <= batchTimestamp < endTime`. Trading on upcoming rounds
-  is not in scope.
+- **Void**: if no accepted snapshot exists for either boundary (for example, the feed updated more
+  than 5 s after t before anyone snapshotted), the round is void. Every share, Up or Down, redeems
+  at 0.50, with no haircut, no pool contribution and no loser shares.
 - **Resolve** after `endTime + MAX_LAG` (so every batch stamped before end has landed). Resolve
   adds `0.10 × outstandingPairs` to `raised`. outstandingPairs = pairs minted − pairs merged, so
-  each outstanding winning share sits across from exactly one losing share.
+  each outstanding winning share sits across from exactly one losing share. If `raised >= target`,
+  the launch graduates in the same call.
+- **Tradable** only while live **and after the previous round has resolved**:
+  `startTime <= batchTimestamp < endTime`, round k−1 resolved (so the price to beat is recorded
+  and the launch is known not to have graduated). *(Builder-check call: this leaves a pause of
+  about `MAX_LAG` + one block, roughly 15–20 s, at the start of each round. It makes graduation
+  clean: no round after the final one ever has positions. The UI shows "Next round opening…"
+  during the pause.)* The keeper runs resolve(k) and snapshot together right after
+  `end + MAX_LAG`. Trading on upcoming rounds is not in scope.
 - **Redeem** (permissionless, for any user list; the keeper batches it): a winning share credits
   0.90 USDT to the holder's balance; a losing share adds to the holder's `loserShares` for the
   launch.
@@ -207,7 +217,9 @@ The user picked B.
   round's Up price, and a "Create launch" button.
 - **Create launch**: form (name, symbol, image URL, feed, interval filtered by feed, target ≥
   100).
-- **Launch page**: the Polymarket layout in the reference screenshot. Header with coin + game; price
+- **Launch page**: the Polymarket layout in the reference screenshot
+  ([assets/polymarket-btc-5m.png](assets/polymarket-btc-5m.png); use it for layout only, not
+  Polymarket's branding). Header with coin + game; price
   to beat, current price with delta, countdown; live chart with the target line; round strip (past
   outcomes as ▲/▼ dots, live, upcoming); right panel with Buy/Sell, Up/Down prices, amount
   presets, a "win $X" preview **that shows the 0.90 payout**, and the order book. Below that:
