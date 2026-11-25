@@ -120,10 +120,10 @@ The user picked B.
    where the interval must be allowed for that feed; **cut** (user's decision): one of 10% (default),
    15%, 20%, 25% or 30%, stored per launch and fixed for its lifetime; **graduation target** in USDT (creator's
    choice, at least `minTarget`); **deadline** (creator's choice). `minTarget` is an
-   admin-configurable value, **100 USDT for the mock/demo** (user's decision). It follows Flap's
-   creation floor, `$750 × multiplier × totalSupply / poolToken`, which is $1,500 at 50% in the pool
-   with multiplier 1. Before a real Flap launch, set `minTarget` to the floor for the multiplier
-   Flap agrees during its factory audit. A target below Flap's $3,000 "Graduated" floor (at 50%)
+   admin-configurable value, **1,500 USDT by default** (user's decision: the mock USDT is free, so
+   the demo can match Flap). That equals Flap's creation floor, `$750 × multiplier × totalSupply /
+   poolToken`, at 50% in the pool with multiplier 1. If Flap agrees a lower multiplier during its
+   factory audit, lower `minTarget` to match. A target below Flap's $3,000 "Graduated" floor (at 50%)
    still launches, but would show as "New" on Flap. The game's round 0 starts at the next interval boundary (rounds align
    to wall clock: 5m rounds at :00, :05, ...).
 2. **Active**: rounds run back to back. Each round's cut adds to `raised`.
