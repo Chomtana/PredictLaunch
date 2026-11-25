@@ -34,6 +34,8 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint8 internal constant UP = 0;
     uint8 internal constant DOWN = 1;
     uint8 internal constant VOID = 2;
+    uint8 internal constant BUY = 0;
+    uint8 internal constant SELL = 1;
 
     /// @notice EIP-712 domain: ("bilauncher", "1", chainid, this).
     bytes32 public immutable DOMAIN_SEPARATOR;
@@ -109,6 +111,11 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint64 withdrawTo;
     }
 
+    struct Position {
+        uint128 up;
+        uint128 down;
+    }
+
     struct WithdrawRequest {
         address user;
         uint128 amount;
@@ -141,6 +148,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     mapping(bytes32 orderHash => uint128) public filled;
 
     LaunchView[] internal _launches;
+    mapping(uint256 id => mapping(address user => Position)) internal _positions;
 
     // ---------------------------------------------------------------------------------------------------------
     // Events
@@ -177,6 +185,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     event Resolved(uint256 indexed launchId, uint8 outcome, uint128 pairs, uint256 raised);
     event Graduating(uint256 indexed launchId);
     event LaunchFailed(uint256 indexed launchId);
+    event Trade(
+        uint256 indexed launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount
+    );
     event BatchSubmitted(uint64 indexed batchId, uint64 ts, uint256 fills);
 
     // ---------------------------------------------------------------------------------------------------------
@@ -212,6 +223,13 @@ contract Exchange is Ownable, ReentrancyGuard {
     error BadPrice();
     error AlreadySnapped();
     error AlreadyResolved();
+    error BadFill();
+    error BadAmount();
+    error NotTradable();
+    error BadCross();
+    error Overfill();
+    error InsufficientBalance();
+    error InsufficientShares();
 
     modifier onlyOperator() {
         if (!operators[msg.sender]) revert NotOperator();
@@ -500,6 +518,21 @@ contract Exchange is Ownable, ReentrancyGuard {
         lastBatchTs = b.ts;
         uint64 id = ++batchCount;
 
+        for (uint256 i; i < b.keys.length; ++i) {
+            _applyKeyAuth(b.keys[i]);
+        }
+        // every order is verified once per batch; fills then reference them by index
+        uint256 n = b.orders.length;
+        bytes32[] memory hashes = new bytes32[](n);
+        for (uint256 i; i < n; ++i) {
+            hashes[i] = _checkOrder(b.orders[i].order, b.orders[i].sig, b.ts);
+        }
+        for (uint256 i; i < b.fills.length; ++i) {
+            Fill calldata f = b.fills[i];
+            if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
+            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, b.ts);
+        }
+
         uint64 to = b.withdrawTo;
         if (to > _withdraws.length) revert BadIndex();
         for (uint64 i = withdrawProcessed; i < to; ++i) {
@@ -508,5 +541,104 @@ contract Exchange is Ownable, ReentrancyGuard {
         }
         if (to > withdrawProcessed) withdrawProcessed = to;
         emit BatchSubmitted(id, b.ts, b.fills.length);
+    }
+
+    /// @dev One fill at the maker's price. Transfer: shares one way, BNB the other. Mint: both buy opposite outcomes,
+    ///      a new pair backed by exactly 1 BNB. Merge: both sell opposite outcomes, a pair is burned and its 1 BNB paid.
+    function _applyFill(
+        Eip712.Order calldata t,
+        Eip712.Order calldata m,
+        bytes32 th,
+        bytes32 mh,
+        Fill calldata f,
+        uint64 ts
+    ) internal {
+        uint128 amt = f.amount;
+        if (amt == 0 || amt % SHARE_UNIT != 0) revert BadAmount();
+        if (t.launchId != m.launchId) revert BadFill();
+        uint256 id = t.launchId;
+        if (!isTradable(id, ts)) revert NotTradable();
+        _addFilled(th, t.amount, amt);
+        _addFilled(mh, m.amount, amt);
+
+        uint8 pm = m.price;
+        // exact: amt is a multiple of 1e16
+        uint256 makerValue = uint256(amt) * pm / 100;
+        uint256 takerValue = uint256(amt) - makerValue;
+        uint8 kind = f.kind;
+        if (kind == 0) {
+            if (t.outcome != m.outcome || t.side == m.side) revert BadCross();
+            if (t.side == BUY) {
+                if (pm > t.price) revert BadCross();
+                _transfer(id, t.outcome, m.owner, t.owner, amt, makerValue);
+            } else {
+                if (pm < t.price) revert BadCross();
+                _transfer(id, t.outcome, t.owner, m.owner, amt, makerValue);
+            }
+        } else if (kind == 1) {
+            if (t.side != BUY || m.side != BUY || t.outcome == m.outcome || uint256(t.price) + pm < 100) {
+                revert BadCross();
+            }
+            _debit(m.owner, makerValue);
+            _debit(t.owner, takerValue);
+            _addShares(id, m.owner, m.outcome, amt);
+            _addShares(id, t.owner, t.outcome, amt);
+            _launches[id].pairs += amt;
+        } else if (kind == 2) {
+            if (t.side != SELL || m.side != SELL || t.outcome == m.outcome || uint256(t.price) + pm > 100) {
+                revert BadCross();
+            }
+            _subShares(id, m.owner, m.outcome, amt);
+            _subShares(id, t.owner, t.outcome, amt);
+            balanceOf[m.owner] += makerValue;
+            balanceOf[t.owner] += takerValue;
+            _launches[id].pairs -= amt;
+        } else {
+            revert BadFill();
+        }
+        emit Trade(id, th, mh, kind, pm, amt);
+    }
+
+    function _transfer(uint256 id, uint8 outcome, address seller, address buyer, uint128 amt, uint256 cost)
+        internal
+    {
+        _debit(buyer, cost);
+        balanceOf[seller] += cost;
+        _subShares(id, seller, outcome, amt);
+        _addShares(id, buyer, outcome, amt);
+    }
+
+    function _addFilled(bytes32 h, uint128 orderAmount, uint128 amt) internal {
+        uint128 nf = filled[h] + amt;
+        if (nf > orderAmount) revert Overfill();
+        filled[h] = nf;
+    }
+
+    function _debit(address u, uint256 amt) internal {
+        uint256 bal = balanceOf[u];
+        if (bal < amt) revert InsufficientBalance();
+        balanceOf[u] = bal - amt;
+    }
+
+    function _addShares(uint256 id, address u, uint8 outcome, uint128 amt) internal {
+        Position storage p = _positions[id][u];
+        if (outcome == UP) p.up += amt;
+        else p.down += amt;
+    }
+
+    function _subShares(uint256 id, address u, uint8 outcome, uint128 amt) internal {
+        Position storage p = _positions[id][u];
+        if (outcome == UP) {
+            if (p.up < amt) revert InsufficientShares();
+            p.up -= amt;
+        } else {
+            if (p.down < amt) revert InsufficientShares();
+            p.down -= amt;
+        }
+    }
+
+    function position(uint256 id, address u) external view returns (uint128 up, uint128 down) {
+        Position storage p = _positions[id][u];
+        return (p.up, p.down);
     }
 }
