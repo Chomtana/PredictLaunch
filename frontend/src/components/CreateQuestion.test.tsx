@@ -87,7 +87,7 @@ describe('CreateLaunchForm question mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Get Cournot odds/ }))
     const rec = await screen.findByTestId('oracle-record')
     expect(cournot.probability).toHaveBeenCalledTimes(1)
-    expect(cournot.probability).toHaveBeenCalledWith(Q, '2849008')
+    expect(cournot.probability).toHaveBeenCalledWith(Q, '2849008', { title: markets[0].title, endTime: markets[0].endTime })
     expect(rec.textContent).toContain('93.4%')
     expect(rec.textContent).toContain('Simulated oracle')
     expect(rec.textContent).toContain('point_estimate')

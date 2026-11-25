@@ -45,9 +45,9 @@ const bytes = (s: string) => new TextEncoder().encode(s).length
 /** The two Cournot calls the form makes (injectable for tests). */
 export interface CournotClient {
   resolve: (message: string) => Promise<{ markets: CournotMarket[] }>
-  probability: (message: string, marketId: number | string) => Promise<OracleRecord>
+  probability: (message: string, marketId: number | string, market?: { title: string; endTime: CournotMarket['endTime'] }) => Promise<OracleRecord>
 }
-const defaultCournot: CournotClient = { resolve: (m) => api.cournotResolve(m), probability: (m, id) => api.cournotProbability(m, id) }
+const defaultCournot: CournotClient = { resolve: (m) => api.cournotResolve(m), probability: (m, id, mk) => api.cournotProbability(m, id, mk) }
 
 /** id "none" = the creator chose "No matching market" (marketId 0). */
 type Choice = { id: string; market: CournotMarket | null } | null
@@ -199,7 +199,9 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     setPreviewing(true)
     setCnErr(null)
     try {
-      setPreview(await cournot.probability(claim, pick.id === 'none' ? 0 : pick.id))
+      setPreview(await (pick.id === 'none' || !pick.market
+        ? cournot.probability(claim, 0)
+        : cournot.probability(claim, pick.id, { title: pick.market.title, endTime: pick.market.endTime })))
     } catch (e) {
       setCnErr(cournotError(e))
     } finally {

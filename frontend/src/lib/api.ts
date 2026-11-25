@@ -259,7 +259,9 @@ export const api = {
   /** Free; always a live Cournot call. */
   cournotResolve: (message: string) => post<{ markets: CournotMarket[] }>('/api/cournot/resolve', { message }),
   /** May cost money in live mode (cached by (message, marketId)): only call on an explicit user action. */
-  cournotProbability: (message: string, marketId: Num) => post<OracleRecord>('/api/cournot/probability', { message, marketId: Number(marketId) }),
+  /** `market` = the creator's pick (title + end time): Cournot ids are per-response, so the sequencer re-matches by these. */
+  cournotProbability: (message: string, marketId: Num, market?: { title: string; endTime: Num | null }) =>
+    post<OracleRecord>('/api/cournot/probability', { message, marketId: Number(marketId), ...(market ? { market } : {}) }),
   oracle: (id: Num) => req<LaunchOracle>(`/api/launch/${id}/oracle`),
 }
 
