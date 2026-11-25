@@ -1,0 +1,245 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {Test, Vm} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+
+import {Exchange} from "src/Exchange.sol";
+import {Eip712} from "src/lib/Eip712.sol";
+import {IPortal} from "src/flap/IPortal.sol";
+import {ILauncherDescription} from "src/flap/ILauncher.sol";
+import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
+import {BilauncherLauncher} from "src/flap/BilauncherLauncher.sol";
+
+interface IProxyAdminLike {
+    function owner() external view returns (address);
+}
+
+interface IRouterLike {
+    function factory() external view returns (address);
+}
+
+interface IPairFactoryLike {
+    function getPair(address, address) external view returns (address);
+}
+
+/// The full launch path on a BSC-testnet fork against the real Flap Portal:
+/// Portal.newLauncher -> our factory -> BilauncherLauncher (salt locked) -> Exchange.registerLaunch; trade; settle on
+/// the real BTCB Atlas feed (slot 0x32 driven by vm.store); resolve -> Graduating; graduate -> launchTaxTokenV2.
+contract FlapForkTest is Test {
+    address constant PORTAL = 0x000042108465206185A077Edc3F3fd2b49060000;
+    address constant PROXY_ADMIN = 0x0000Ed588dfc01749C20bA69b5f8c77d706E0000;
+    address constant GUARDIAN = 0x00004d58290854c5E9880F4b5B1993c6Ad8b0000;
+    address constant TOKEN_IMPL = 0x7777c57ff7dc441c1715b2e36fa581c48B782222;
+    address constant WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
+    address constant ROUTER = 0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3;
+    address constant BTCB_FEED = 0xe20536BC715AaC6560394e33deB66ed205AEeC33;
+
+    IPortal portal = IPortal(PORTAL);
+    Exchange ex;
+    BilauncherLauncherFactory factory;
+    address owner = address(uint160(0xC0DE1001));
+    address operator = address(uint160(0xC0DE1002));
+    address creator = address(uint160(0xC0DE1003));
+    uint256 constant ALICE_PK = 0xA11CE;
+    uint256 constant BOB_PK = 0xB0B;
+    address alice = vm.addr(ALICE_PK);
+    address bob = vm.addr(BOB_PK);
+
+    function setUp() public {
+        string memory rpc = vm.envOr("BSC_TESTNET_RPC_URL", string(""));
+        if (bytes(rpc).length == 0) {
+            vm.skip(true);
+            return;
+        }
+        vm.createSelectFork(rpc);
+        require(block.chainid == 97, "not BSC testnet");
+
+        ex = new Exchange(owner);
+        factory = new BilauncherLauncherFactory(PORTAL, GUARDIAN, address(ex));
+        vm.startPrank(owner);
+        ex.setFactory(address(factory));
+        ex.setFeed(BTCB_FEED, true);
+        ex.setOperator(operator, true);
+        vm.stopPrank();
+        // Atlas feeds only serve EOAs and authorized callers: authorize the Exchange (mapping at slot 1)
+        vm.store(BTCB_FEED, keccak256(abi.encode(address(ex), uint256(1))), bytes32(uint256(1)));
+
+        vm.deal(creator, 1 ether);
+        vm.deal(alice, 20 ether);
+        vm.deal(bob, 20 ether);
+    }
+
+    function _openFactory() internal {
+        vm.prank(IProxyAdminLike(PROXY_ADMIN).owner());
+        portal.setLauncherFactoryMultiplier(address(factory), 10_000, true);
+    }
+
+    /// A salt whose predicted token address ends in 0x7777 (hashing in scratch space, as Flap's ForkBase does).
+    function _mineSalt(bytes32 seed) internal pure returns (bytes32 salt) {
+        for (uint256 i;; ++i) {
+            assembly ("memory-safe") {
+                mstore(0x00, seed)
+                mstore(0x20, i)
+                salt := keccak256(0x00, 0x40)
+            }
+            if (uint16(uint160(Clones.predictDeterministicAddress(TOKEN_IMPL, salt, PORTAL))) == 0x7777) return salt;
+        }
+    }
+
+    function _price() internal returns (uint256 p) {
+        uint256 w = uint256(vm.load(BTCB_FEED, bytes32(uint256(0x32))));
+        p = uint80(w);
+    }
+
+    function _setFeed(uint256 answer, uint256 updatedAt) internal {
+        uint256 w = (updatedAt << 128) | (updatedAt << 80) | answer;
+        vm.store(BTCB_FEED, bytes32(uint256(0x32)), bytes32(w));
+    }
+
+    function _cfg(bytes32 salt) internal returns (Exchange.LaunchConfig memory c) {
+        c.name = "Loser Coin";
+        c.symbol = "LOSE";
+        c.imageURI = "ipfs://bilauncher-test";
+        c.feed = BTCB_FEED;
+        c.strike = _price();
+        c.settleTime = uint64(block.timestamp + 600);
+        c.cutBps = 3000;
+        c.target = 2.15 ether;
+        c.salt = salt;
+    }
+
+    function _signed(Eip712.Order memory o, uint256 pk) internal view returns (Exchange.SignedOrder memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, ex.orderHash(o));
+        return Exchange.SignedOrder(o, abi.encodePacked(r, s, v));
+    }
+
+    function _pauseCreation() internal {
+        vm.prank(IProxyAdminLike(PROXY_ADMIN).owner());
+        portal.setCreationPaused(true);
+    }
+
+    /// Plan C6 expected "newLauncher reverts before Flap opens the factory". The real testnet Portal (v1.2.0) does
+    /// not gate it: with creation paused and the factory never opened, `newLauncher` and the Launcher's
+    /// `launchTaxTokenV2` both go through. This pins that fact (see SPEC-NOTES.md); if Flap adds the gate, this test
+    /// fails and the factory must be opened first (the dev script opens it anyway).
+    function test_unopenedFactoryNotGatedOnTestnetPortal() public {
+        _pauseCreation();
+        assertEq(portal.featureFlags() & 1, 1, "paused");
+        (bool enabled,) = portal.launcherFactoryMultiplier(address(factory));
+        assertFalse(enabled, "factory not opened");
+        _fullFlow(keccak256("unopened"));
+    }
+
+    /// Creation paused, factory opened by Flap: the complete launch goes through.
+    function test_graduateOnRealPortal() public {
+        _pauseCreation();
+        _openFactory();
+        _fullFlow(keccak256("bilauncher-fork"));
+    }
+
+    /// The live testnet Portal has creation open (featureFlags == 0): an unopened factory works end to end there.
+    function test_graduateWithCreationOpenAndUnopenedFactory() public {
+        assertEq(portal.featureFlags() & 1, 0, "testnet creation is open");
+        (bool enabled,) = portal.launcherFactoryMultiplier(address(factory));
+        assertFalse(enabled);
+        _fullFlow(keccak256("bilauncher-fork-unopened"));
+    }
+
+    function _fullFlow(bytes32 seed) internal {
+        bytes32 salt = _mineSalt(seed);
+        Exchange.LaunchConfig memory c = _cfg(salt);
+        uint256 fee = portal.SALT_LOCK_FEE();
+
+        vm.recordLogs();
+        vm.prank(creator);
+        address launcher = portal.newLauncher{value: fee}(address(factory), abi.encode(c));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertGt(logs.length, 0);
+
+        assertEq(portal.getLauncher(launcher).launcherFactory, address(factory), "Portal records our factory");
+        assertEq(ex.launchCount(), 1);
+        Exchange.LaunchView memory l = ex.getLaunch(0);
+        assertEq(l.rail, launcher);
+        assertEq(l.creator, creator);
+        assertEq(l.token, factory.predictedToken(salt));
+        assertEq(BilauncherLauncher(launcher).launchId(), 0);
+        assertEq(factory.predictedLauncher(salt), launcher);
+
+        string memory d = ILauncherDescription(launcher).description();
+        _assertContains(d, '{"v":1,"name":"Loser Coin","symbol":"LOSE"');
+        _assertContains(d, '"quoteToken":"0x0000000000000000000000000000000000000000"');
+        _assertContains(d, '"targetRaise":"2150000000000000000"');
+        _assertContains(d, '"poolTokenRatio":"500000000000000000"');
+        _assertContains(d, '"titleEn":"bilauncher prediction launch"');
+
+        // trade: 8 pairs at 50/50 (cut 30% -> projected raise 2.4 BNB >= 2.15)
+        vm.prank(alice);
+        ex.deposit{value: 10 ether}();
+        vm.prank(bob);
+        ex.deposit{value: 10 ether}();
+        uint64 exp = uint64(block.timestamp + 1 days);
+        Exchange.Batch memory b;
+        b.ts = uint64(block.timestamp);
+        b.orders = new Exchange.SignedOrder[](2);
+        b.orders[0] = _signed(Eip712.Order(bob, 0, 0, 1, 0, 50, 8e18, exp, 1), BOB_PK); // taker: Buy Down
+        b.orders[1] = _signed(Eip712.Order(alice, 0, 0, 0, 0, 50, 8e18, exp, 1), ALICE_PK); // maker: Buy Up
+        b.fills = new Exchange.Fill[](1);
+        b.fills[0] = Exchange.Fill(0, 1, 1, 8e18);
+        vm.prank(operator);
+        ex.submitBatch(b);
+        assertEq(ex.projectedRaised(0), 2.4 ether);
+
+        // settle above the strike on the real feed contract
+        vm.warp(c.settleTime);
+        _setFeed(c.strike + 1, c.settleTime);
+        ex.snapshot(0);
+        vm.warp(c.settleTime + 15);
+        ex.resolve(0);
+        l = ex.getLaunch(0);
+        assertEq(l.outcome, 0, "Up");
+        assertEq(l.status, 1, "Graduating");
+        assertEq(l.raised, 2.4 ether);
+
+        uint256 exBal = address(ex).balance;
+        ex.graduate(0);
+        l = ex.getLaunch(0);
+        assertEq(l.status, 2, "Graduated");
+        address token = l.token;
+        assertEq(uint16(uint160(token)), 0x7777, "token ends in 7777");
+        assertEq(BilauncherLauncher(launcher).token(), token);
+        assertEq(address(ex).balance, exBal - 2.4 ether);
+        assertEq(IERC20(token).balanceOf(address(ex)), 500_000_000e18, "Exchange holds the losers' 500M");
+        address pair = IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, WBNB);
+        assertTrue(pair != address(0), "PancakeSwap pair exists");
+        assertEq(IERC20(token).balanceOf(pair), 500_000_000e18, "pool holds 500M");
+
+        // redeem: Alice (Up) gets 8 * 0.70, Bob's 8 Down make him the only loser -> he claims all 500M
+        address[] memory us = new address[](2);
+        us[0] = alice;
+        us[1] = bob;
+        ex.redeem(0, us);
+        assertEq(ex.balanceOf(alice), 10 ether - 4 ether + 5.6 ether);
+        vm.prank(bob);
+        ex.claimTokens(0);
+        assertEq(IERC20(token).balanceOf(bob), 500_000_000e18);
+        assertFalse(ex.isTradable(0, uint64(block.timestamp)));
+    }
+
+    function _assertContains(string memory h, string memory n) internal pure {
+        bytes memory hb = bytes(h);
+        bytes memory nb = bytes(n);
+        for (uint256 i; i + nb.length <= hb.length; ++i) {
+            bool m = true;
+            for (uint256 j; j < nb.length; ++j) {
+                if (hb[i + j] != nb[j]) {
+                    m = false;
+                    break;
+                }
+            }
+            if (m) return;
+        }
+        revert(string.concat("missing: ", n));
+    }
+}

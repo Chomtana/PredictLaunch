@@ -72,7 +72,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint64 createdAt;
         uint16 cutBps;
         uint256 target;
-        uint128 pairs;
+        uint256 pairs;
         uint256 raised;
         uint8 status; // 0 Active, 1 Graduating, 2 Graduated, 3 Failed
         uint8 outcome; // 0 Up, 1 Down, 2 Void (valid once resolved)
@@ -165,21 +165,21 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     event FactorySet(address factory);
-    event OperatorSet(address indexed op, bool on);
-    event FeedSet(address indexed feed, bool enabled);
+    event OperatorSet(address op, bool on);
+    event FeedSet(address feed, bool enabled);
     event MinTargetSet(uint256 minTarget);
-    event Deposited(address indexed user, uint256 amount);
-    event WithdrawRequested(uint64 indexed idx, address indexed user, uint256 amount);
-    event WithdrawPaid(uint64 indexed idx, address indexed user, uint256 requested, uint256 paid);
-    event PayoutPending(address indexed user, uint256 amount);
-    event PayoutClaimed(address indexed user, uint256 amount);
-    event KeyAuthorized(address indexed owner, address indexed key, uint64 expiry);
-    event KeyRevoked(address indexed owner, address indexed key);
-    event OrderCancelled(address indexed owner, bytes32 indexed orderHash);
-    event MinNonceBumped(address indexed owner, uint64 minNonce);
+    event Deposited(address user, uint256 amount);
+    event WithdrawRequested(uint64 idx, address user, uint256 amount);
+    event WithdrawPaid(uint64 idx, address user, uint256 requested, uint256 paid);
+    event PayoutPending(address user, uint256 amount);
+    event PayoutClaimed(address user, uint256 amount);
+    event KeyAuthorized(address owner, address key, uint64 expiry);
+    event KeyRevoked(address owner, address key);
+    event OrderCancelled(address owner, bytes32 orderHash);
+    event MinNonceBumped(address owner, uint64 minNonce);
     event LaunchCreated(
-        uint256 indexed launchId,
-        address indexed creator,
+        uint256 launchId,
+        address creator,
         address rail,
         address token,
         address feed,
@@ -191,17 +191,17 @@ contract Exchange is Ownable, ReentrancyGuard {
         string symbol,
         string imageURI
     );
-    event Snapshot(uint256 indexed launchId, uint256 price, uint64 updatedAt);
-    event Resolved(uint256 indexed launchId, uint8 outcome, uint128 pairs, uint256 raised);
-    event Graduating(uint256 indexed launchId);
-    event LaunchFailed(uint256 indexed launchId);
-    event Graduated(uint256 indexed launchId, address token, uint256 raised);
-    event Redeemed(uint256 indexed launchId, address indexed user, uint256 credit, uint256 loserShares);
-    event TokensClaimed(uint256 indexed launchId, address indexed user, uint256 amount);
+    event Snapshot(uint256 launchId, uint256 price, uint64 updatedAt);
+    event Resolved(uint256 launchId, uint8 outcome, uint256 pairs, uint256 raised);
+    event Graduating(uint256 launchId);
+    event LaunchFailed(uint256 launchId);
+    event Graduated(uint256 launchId, address token, uint256 raised);
+    event Redeemed(uint256 launchId, address user, uint256 credit, uint256 loserShares);
+    event TokensClaimed(uint256 launchId, address user, uint256 amount);
     event Trade(
-        uint256 indexed launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount
+        uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount
     );
-    event BatchSubmitted(uint64 indexed batchId, uint64 ts, uint256 fills);
+    event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
 
     // ---------------------------------------------------------------------------------------------------------
     // Errors
@@ -481,7 +481,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint256 st = l.settleTime;
         if (block.timestamp < st + MAX_LAG || (!l.snapped && block.timestamp <= st + GRACE)) revert TooEarly();
         l.resolved = true;
-        uint128 pairs = l.pairs;
+        uint256 pairs = l.pairs;
         uint8 outcome;
         if (!l.snapped) {
             outcome = VOID;

@@ -1,0 +1,20 @@
+[
+  { "address": "0xe20536bc715aac6560394e33deb66ed205aeec33", "symbol": "BTCB/USD" },
+  { "address": "0xb3d1614bf894e68add1ea50ca250c152bad5256f", "symbol": "BNB/USD" },
+  { "address": "0xed2ce62b7bfdd31876b1e956a672e8fbe8b29403", "symbol": "ANKR/USD" },
+  { "address": "0x060d5be909a3f775ddc239d982e4fe46879bce4a", "symbol": "CAKE/USD" },
+  { "address": "0xee9483fd2d380384d42326143f4bc9bd0513234d", "symbol": "ASTER/USD" },
+  { "address": "0x6eba8b28f2411ab14f7ecdc3a2477ad436acbd21", "symbol": "WLFI/USD" },
+  { "address": "0x2bcdfbc731fd179c70794854a4260774369c8d27", "symbol": "B/USD" },
+  { "address": "0xd6cf91a4d545462821a43997a6df104c5068d71d", "symbol": "B2/USD" },
+  { "address": "0x8b8678dc64b7539a59e68e25d10cb2846f0918fe", "symbol": "AT/USD" },
+  { "address": "0x61e4be67372e5dff1b8539cc5441b170ede68a48", "symbol": "TAKE/USD" },
+  { "address": "0xe659636dbe70e9a53f7762d9eef385a4fa528475", "symbol": "EGL1/USD" },
+  { "address": "0x2bc9c150981d74e24b85c3d714852631928599b4", "symbol": "PUFFER/USD" },
+  { "address": "0x5036f6f0b618b5eb12452b9fc782c8d2e5e996c9", "symbol": "CDL/USD" },
+  { "address": "0xff45b658838fb3afa2d00cca5033258c262f98de", "symbol": "AB/USD" },
+  { "address": "0x9a97167364dd00f8bc52e346ccb8d603e0b9a740", "symbol": "SPA/USD" },
+  { "address": "0xfe9a5337da82a0fc8476c2a1edc292d729d29f71", "symbol": "OIK/USD" },
+  { "address": "0x9dfd7992952bb9e8fb4bc6065fdc3518addc4e8b", "symbol": "USDT/USD" },
+  { "address": "0x14a20eafffada4d78afeef1185e7317cf98f6a1f", "symbol": "BUSD/USD" }
+]
