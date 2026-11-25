@@ -106,7 +106,8 @@ function bumpMinNonce(uint64 minNonce) external;                     // orders w
 
 // launches (one binary market each)
 struct LaunchConfig { string name; string symbol; string imageURI; address feed; uint256 strike;
-                      uint64 settleTime; uint16 cutBps; uint256 target; bytes32 salt; }
+                      uint64 settleTime; uint16 cutBps; uint256 target; bytes32 salt;
+                      string question; uint256 marketId; }      // question/marketId: see "Question launches"
 // Users create a launch with Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig)).
 // The factory deploys a BilauncherLauncher (beacon proxy), whose initialize locks the salt, then calls:
 function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
@@ -209,6 +210,130 @@ raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`, `LaunchF
 `Redeemed(launchId, user, credit, loserShares)`, `TokensClaimed(launchId, user, amount)`,
 `BatchSubmitted(batchId, ts, fills)`, `Trade(launchId, takerHash, makerHash, kind, makerPrice,
 amount)`.
+
+### Question launches (Cournot) — added 2026-11-26, user's decision
+
+Two launch kinds share everything (Exchange, book, cut, graduation, loser claims, redeem). They differ
+only in how the market is defined and settled.
+
+| | Price launch (unchanged) | Question launch (new) |
+|---|---|---|
+| Config | `feed` enabled, `strike > 0`, `question = ""`, `marketId = 0` | `feed = address(0)`, `strike = 0`, `question` 1–280 bytes, `marketId` = Cournot market id (0 = no match) |
+| Outcome 0 / 1 | Up / Down | **YES / NO** (same storage, UI labels differ) |
+| Settled by | `snapshot` (Atlas, Chainlink fallback) | resolver `proposeOutcome` + challenge window, or owner `overrideOutcome` |
+| Opening price (bots) | `fairUpCents` volatility model | Cournot probability |
+
+The creator sets `settleTime` (same `MIN_DURATION..MAX_DURATION` rule) and is trusted to choose a sensible
+one (user's decision, hackathon scope). Cournot is offchain only; nothing about it is verified onchain.
+
+**Contract additions (Exchange):**
+```solidity
+uint256 public constant QUESTION_DEADLINE = 7 days;   // no proposal by settleTime + this -> resolve() voids
+address public resolver;                               // the sequencer operator in the dev stack
+uint64  public challengeWindow;                        // default 3600; owner-settable, <= 7 days
+function setResolver(address r) external;              // onlyOwner
+function setChallengeWindow(uint64 s) external;        // onlyOwner; reverts BadConfig if > 7 days
+struct QuestionView { string question; uint256 marketId; bool proposed; uint8 proposedOutcome;
+                      uint64 proposedAt; bytes32 evidenceHash; bool final_; }
+function getQuestion(uint256 id) external view returns (QuestionView memory); // empty for price launches
+function isQuestion(uint256 id) external view returns (bool);                  // feed == address(0)
+function proposeOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external; // only resolver
+function overrideOutcome(uint256 id, uint8 outcome, bytes32 evidenceHash) external; // onlyOwner
+event QuestionSet(uint256 launchId, string question, uint256 marketId);   // right after LaunchCreated
+event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
+event ResolverSet(address resolver);
+event ChallengeWindowSet(uint64 seconds_);
+```
+Rules (one line each):
+- `registerLaunch`: if `question` is empty → the price rules as before and `marketId` must be 0. Else
+  `feed == address(0)`, `strike == 0`, `question` 1–280 bytes; duration, cut, target, name, symbol as
+  before. `LaunchView` is unchanged (feed = 0 marks a question launch); question data lives in a
+  separate mapping read by `getQuestion`. Emits `LaunchCreated` (feed 0, strike 0) then `QuestionSet`.
+- `snapshot` on a question launch reverts `NotPriceLaunch`. `proposeOutcome`/`overrideOutcome` on a
+  price launch revert `NotQuestionLaunch`.
+- `proposeOutcome`: `msg.sender == resolver` (else `NotResolver`), not resolved, not already proposed
+  (`AlreadyProposed`), `block.timestamp >= settleTime + MAX_LAG` (else `TooEarly`), outcome ∈ {0 YES,
+  1 NO, 2 VOID} (else `BadOutcome`). Stores proposal with `proposedAt = now`, `final_ = false`.
+- `overrideOutcome`: owner, not resolved, `block.timestamp >= settleTime + MAX_LAG`, outcome ∈ {0,1,2};
+  replaces any proposal and sets `final_ = true` (resolvable immediately).
+- `resolve` for a question launch: `now >= settleTime + MAX_LAG` and one of: `final_`; or `proposed` and
+  `now >= proposedAt + challengeWindow`; or no proposal and `now > settleTime + QUESTION_DEADLINE`
+  (→ VOID). Else `TooEarly`. The chosen outcome then goes through the same code path as a price launch
+  (VOID → Failed; else raised = pairs × cut, ≥ target → Graduating, else Failed).
+- `LaunchConfig` gains `string question; uint256 marketId` at the **end**; the factory's
+  `launcherDataSchema()` lists them too. Every encoder (frontend, seed, e2e, fork tests) passes them.
+- Deploy: `setResolver(operator)`; dev stack `setChallengeWindow(120)` so a demo settles in minutes.
+
+**Cournot client (sequencer, `sequencer/src/cournot.rs`).** Base `COURNOT_API_BASE` (default
+`https://interface.cournot.ai`), paths `/intelligence/v1/resolve` and `/intelligence/v1/probability`
+(from Cournot's own client, `github.com/Cournot-AI/cournot-skills`). `COURNOT_MODE=live|mock` (**default
+live**), `COURNOT_API_KEY` optional (header `COURNOT-API-KEY`; never logged). No x402 wallet flow: a 402
+in live mode is reported as `payment_required`.
+- `resolve(message, limit≤10)` → POST `{message, limit}` → `{code:0, data:{markets:[{matching_confidence,
+  market_info:{id, title, description, start_time, end_time, market_outcome, market_outcome_price}}]}}`.
+  Free. **Always live, in both modes** (it costs nothing). Facts from the 2026-11-26 probe:
+  `market_outcome` is the side label ("YES"), `market_outcome_price` the live YES price, not a result;
+  closed markets disappear; confidence is not a reliable filter (wrong cities scored 0.76).
+- `probability(message, [marketId])` → POST `{message, market_ids}`. Live: parse leniently,
+  `point = data.result.point_estimate ?? data.probability.point_estimate ?? data.probability (number)`,
+  `basis = data.basis ?? data.probability.basis`, `result = data.result ?? data.probability`; keep the
+  raw body. Mock: no network call to `probability`; `point` = the matched market's live
+  `market_outcome_price` from a `resolve` (0.5 if not found), `result = {point_estimate, mock:true}`,
+  `basis = {primary_anchor:{source:"mock", summary:"<market title> trades at <p>", market_id},
+  limitations:["Simulated oracle (COURNOT_MODE=mock): no Cournot probability call was made."]}`.
+
+**Oracle record** (normalized; what the API serves and what the UI shows):
+```
+OracleRecord { launchId|null, claim (exact text sent), marketId, market (market_info|null),
+               probability (0..1|null), result (object|null), basis (object|array|null),
+               source: "cournot-live" | "mock", fetchedAt (unix s), error|null, raw|null }
+```
+Stored as JSON under `--oracle-dir` (default `.dev/oracle`): `launch-<id>.json`, `price-<id>.json`
+(`[{t, price}]` from the tracker), `settle-<id>.json` (the evidence the resolver proposed, whose
+`keccak256` of the exact file bytes is `evidenceHash`).
+
+**Sequencer behaviour.**
+- On a new question launch: reuse a cached preview record for the same `(claim, marketId)` if one
+  exists (so a creator's preview isn't charged twice), else call `probability` once. Never more than one
+  opening call per launch, even across restarts (the file is the cache).
+- Tracker: every 60 s, for each unresolved question launch with `marketId > 0`, `resolve(question)`;
+  if the market id is in the results, append `{t, price: market_outcome_price}`.
+- Resolver (keeper): for an unresolved, unproposed question launch with `now >= settleTime + MAX_LAG`:
+  take the last tracked price; ≥ 0.97 → YES, ≤ 0.03 → NO. Else, at most once per launch and only if
+  `mode == mock` or `COURNOT_API_KEY` is set, call `probability` again; ≥ 0.97 / ≤ 0.03 decides. Else do
+  nothing (the owner settles with `overrideOutcome`, e.g. `frontend/scripts/settle.ts`). On a decision,
+  write `settle-<id>.json` and send `proposeOutcome(id, outcome, keccak256(file))`. After that the normal
+  keeper resolves (once the window passes), redeems and graduates.
+- Keeper: never `snapshot` a question launch; `resolve` it per the question rule above.
+
+**API additions.**
+```
+POST /api/cournot/resolve      {message}            → {markets:[{matchingConfidence, id, title, description,
+                                                       startTime, endTime, yesPrice}]}   (free; live)
+POST /api/cournot/probability  {message, marketId}  → OracleRecord (launchId null; cached by (message, marketId))
+GET  /api/launch/:id/oracle    → {opening: OracleRecord|null, prices:[{t, price}], settlement: OracleRecord|null,
+                                  proposal: {proposed, outcome, proposedAt, evidenceHash, final, challengeEndsAt}|null}
+GET  /api/config               + {cournotMode: "live"|"mock", challengeWindow, questionDeadline}
+LaunchSummary                  + {kind: "price"|"question", question|null, marketId|null,
+                                  oracleProbability (0..1|null), oracleSource|null}
+```
+Errors: `cournot_unavailable` (network/5xx), `payment_required` (402), `bad_question` (empty or > 280
+bytes, or Cournot code 4100). Rate-limit both POSTs (e.g. 1 request / 2 s per IP).
+
+**Frontend.** Create form: a "Price" / "Question" switch. Question mode: question text → "Find
+markets" (resolve) → list (title, end time, YES price, confidence; the creator must pick one, or "no
+match" → marketId 0) → "Get Cournot odds" (probability preview: headline %, `result` fields, the full
+`basis` as tables with links, a "simulated" badge when `source == "mock"`) → settlement time (prefilled
+with the market's end time when it is within limits) → launch. Launch page for a question launch:
+question as the title, YES/NO in place of Up/Down everywhere, a Cournot panel (exact claim, probability,
+evidence, limitations, fetched at, source badge, oracle-vs-book gap in cents) in place of the price
+chart, and a settlement panel (proposal, outcome, challenge countdown, evidence link). Cards show the
+question and "YES x¢".
+
+**Bots.** `seed.ts` also creates one question launch: it resolves `"Will it rain in Boston on <tomorrow>?"`
+via `/api/cournot/resolve`, takes the first result, settles in 20 min, and quotes around
+`round(oracleProbability × 100)` (clamped 3..97) instead of `fairUpCents`. `settle.ts --launch N
+--outcome yes|no|void` (owner key) calls `overrideOutcome`.
 
 ### Sequencer HTTP/WS API (default port 8787; JSON; amounts are decimal strings in wei)
 
