@@ -6,30 +6,39 @@
 //! POST /api/msgs     [Msg] atomic group (≤ 16)
 //! POST /api/faucet   {address}  (only with --dev-faucet)
 //! POST /api/poke     re-read the chain now (after a deposit / withdraw tx)
+//! POST /api/cournot/resolve      {message}            → {markets:[...]}   (rate-limited per IP)
+//! POST /api/cournot/probability  {message, marketId}  → OracleRecord      (rate-limited per IP)
+//! GET  /api/launch/{id}/oracle   {opening, prices, settlement, proposal}
 //! WS   /ws           send {sub:{launchId?, user?}}; receive snapshots and price ticks
 //! ```
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::{Address, U256};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use bilauncher_core::state::AcceptError;
-use bilauncher_core::{ErrorCode, CUTS, FEEDS, MAX_DURATION, MIN_DURATION, ONE_BNB};
+use bilauncher_core::{
+    ErrorCode, CUTS, FEEDS, MAX_DURATION, MIN_DURATION, ONE_BNB, QUESTION_DEADLINE,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 
 use crate::app::{now_ms, App};
 use crate::chain::Chain;
+use crate::cournot::{check_question, CournotError};
 use crate::views;
 
 pub const FAUCET_BNB: u128 = 1000;
+/// Markets returned by `POST /api/cournot/resolve`.
+pub const RESOLVE_LIMIT: u32 = 5;
 /// Quote tokens the dev faucet mints when the Exchange's quote is an ERC20 (launch targets start at 1500).
 pub const FAUCET_QUOTE: u128 = 10_000;
 
@@ -46,6 +55,9 @@ pub fn router<C: Chain>(app: Arc<App<C>>) -> Router {
         .route("/api/msgs", post(msgs::<C>))
         .route("/api/faucet", post(faucet::<C>))
         .route("/api/poke", post(poke::<C>))
+        .route("/api/cournot/resolve", post(cournot_resolve::<C>))
+        .route("/api/cournot/probability", post(cournot_probability::<C>))
+        .route("/api/launch/{id}/oracle", get(launch_oracle::<C>))
         .route("/ws", get(ws::<C>))
         .layer(CorsLayer::permissive())
         .with_state(app)
@@ -88,6 +100,9 @@ pub fn config_json<C: Chain>(app: &App<C>) -> Value {
         "maxDuration": MAX_DURATION,
         "batchMs": s.batch_ms,
         "devFaucet": s.dev_faucet,
+        "cournotMode": app.oracle.mode().as_str(),
+        "challengeWindow": app.state.lock().unwrap().challenge_window,
+        "questionDeadline": QUESTION_DEADLINE,
         "domain": {
             "name": "bilauncher",
             "version": "1",
@@ -111,13 +126,16 @@ async fn status<C: Chain>(State(app): AppState<C>) -> Json<Value> {
 }
 
 async fn launches<C: Chain>(State(app): AppState<C>) -> Json<Value> {
-    Json(views::launches(&app.state.lock().unwrap(), now()))
+    let st = app.state.lock().unwrap();
+    let o = app.oracle.briefs.lock().unwrap();
+    Json(views::launches(&st, now(), &o))
 }
 
 fn launch_json<C: Chain>(app: &App<C>, id: u64) -> Option<Value> {
     let st = app.state.lock().unwrap();
     let p = app.prices.lock().unwrap();
-    views::launch_detail(&st, &p, id, now())
+    let o = app.oracle.briefs.lock().unwrap();
+    views::launch_detail(&st, &p, id, now(), &o)
 }
 
 async fn launch<C: Chain>(State(app): AppState<C>, Path(id): Path<u64>) -> Response {
@@ -312,6 +330,105 @@ async fn poke<C: Chain>(State(app): AppState<C>) -> Response {
     }
 }
 
+// ------------------------------------------------------------------------------- cournot
+
+fn cournot_err(e: &CournotError) -> Response {
+    let code = match e {
+        CournotError::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+        CournotError::BadQuestion(_) => StatusCode::BAD_REQUEST,
+        CournotError::Unavailable(_) => StatusCode::BAD_GATEWAY,
+    };
+    err(code, e.code(), e.to_string(), None)
+}
+
+/// The client key of the per-IP rate limit (peer address; "local" without connect info).
+fn client_of(ci: &Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
+    ci.as_ref()
+        .map_or_else(|| "local".into(), |Extension(ConnectInfo(a))| a.ip().to_string())
+}
+
+fn rate_limited<C: Chain>(
+    app: &App<C>,
+    endpoint: &'static str,
+    ci: &Option<Extension<ConnectInfo<SocketAddr>>>,
+) -> Option<Response> {
+    (!app.oracle.allow(endpoint, &client_of(ci), now_ms())).then(|| {
+        err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!(
+                "at most one {endpoint} request every {} ms",
+                app.oracle.rate_limit_ms
+            ),
+            None,
+        )
+    })
+}
+
+/// `message` from the body, checked against the question rule.
+fn question_of(body: &Value) -> Result<String, CournotError> {
+    let q = body
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    check_question(&q)?;
+    Ok(q)
+}
+
+async fn cournot_resolve<C: Chain>(
+    State(app): AppState<C>,
+    ci: Option<Extension<ConnectInfo<SocketAddr>>>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(r) = rate_limited(&app, "resolve", &ci) {
+        return r;
+    }
+    let q = match question_of(&body) {
+        Ok(q) => q,
+        Err(e) => return cournot_err(&e),
+    };
+    match app.oracle.cournot.resolve(&q, RESOLVE_LIMIT).await {
+        Ok(ms) => Json(json!({
+            "markets": ms.iter().map(|m| m.to_api_json()).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => cournot_err(&e),
+    }
+}
+
+async fn cournot_probability<C: Chain>(
+    State(app): AppState<C>,
+    ci: Option<Extension<ConnectInfo<SocketAddr>>>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(r) = rate_limited(&app, "probability", &ci) {
+        return r;
+    }
+    let q = match question_of(&body) {
+        Ok(q) => q,
+        Err(e) => return cournot_err(&e),
+    };
+    let market_id: u64 = match body.get("marketId") {
+        None | Some(Value::Null) => 0,
+        Some(_) => match views::num_field(&body, "marketId") {
+            Ok(v) => v,
+            Err(e) => return err(StatusCode::BAD_REQUEST, "bad_request", e, None),
+        },
+    };
+    match app.oracle_preview(&q, market_id).await {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => cournot_err(&e),
+    }
+}
+
+async fn launch_oracle<C: Chain>(State(app): AppState<C>, Path(id): Path<u64>) -> Response {
+    match app.oracle_view(id) {
+        Some(v) => Json(v).into_response(),
+        None => err(StatusCode::NOT_FOUND, "not_found", "unknown launch", None),
+    }
+}
+
 // ------------------------------------------------------------------------------- websocket
 
 #[derive(Deserialize, Default, Clone, Debug)]
@@ -344,15 +461,16 @@ async fn ws<C: Chain>(State(app): AppState<C>, up: WebSocketUpgrade) -> Response
 pub fn snapshot_json<C: Chain>(app: &App<C>, sub: &Sub, version: u64) -> String {
     let st = app.state.lock().unwrap();
     let p = app.prices.lock().unwrap();
+    let o = app.oracle.briefs.lock().unwrap();
     let now = now();
     let mut v = json!({
         "type": "snapshot",
         "version": version,
         "status": views::status(&st, None),
-        "launches": views::launches(&st, now),
+        "launches": views::launches(&st, now, &o),
     });
     if let Some(id) = sub.launch_id {
-        v["launch"] = views::launch_detail(&st, &p, id, now).unwrap_or(Value::Null);
+        v["launch"] = views::launch_detail(&st, &p, id, now, &o).unwrap_or(Value::Null);
         v["book"] = views::book(&st, id);
         v["trades"] = views::trades(&st, id, 50);
     }

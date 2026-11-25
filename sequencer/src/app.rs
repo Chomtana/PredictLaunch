@@ -30,6 +30,8 @@ pub struct Settings {
     /// Display name of the quote token, overriding its on-chain symbol (Flap's faucet "USD" is shown as
     /// "USDT"). `None`: the on-chain symbol.
     pub quote_symbol: Option<String>,
+    /// Cournot client, oracle store and API rate limit (question launches).
+    pub oracle: crate::oracle::OracleSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +60,9 @@ pub struct App<C: Chain> {
     pub last_error: Mutex<Option<String>>,
     next_block: Mutex<u64>,
     batch_lock: tokio::sync::Mutex<()>,
-    keeper_lock: tokio::sync::Mutex<()>,
+    pub(crate) keeper_lock: tokio::sync::Mutex<()>,
+    /// Cournot client, oracle files and caches (question launches).
+    pub oracle: crate::oracle::Oracle,
     backoff: Mutex<HashMap<KeeperAction, u64>>,
 }
 
@@ -73,12 +77,15 @@ impl<C: Chain> App<C> {
     /// Connect, read the config views and replay every Exchange event since `start_block`.
     pub async fn new(chain: C, settings: Settings) -> anyhow::Result<Arc<Self>> {
         let info = chain.info().await.context("reading chain info")?;
-        let state = State::new(Config {
+        let mut state = State::new(Config {
             domain: settings.domain,
             batch_ms: settings.batch_ms,
         });
+        state.challenge_window = info.challenge_window;
         let start = settings.start_block;
+        let oracle = crate::oracle::Oracle::new(&settings.oracle);
         let app = Arc::new(App {
+            oracle,
             chain,
             settings,
             info,
@@ -176,6 +183,17 @@ impl<C: Chain> App<C> {
         }
     }
 
+    /// Send one keeper action to the chain.
+    pub async fn execute(&self, a: &KeeperAction) -> anyhow::Result<B256> {
+        match a {
+            KeeperAction::Snapshot(l) => self.chain.snapshot(*l).await,
+            KeeperAction::Resolve(l) => self.chain.resolve(*l).await,
+            KeeperAction::Redeem(l, users) => self.chain.redeem(*l, users.clone()).await,
+            KeeperAction::Graduate(l) => self.chain.graduate(*l).await,
+            KeeperAction::Propose(l, outcome, h) => self.chain.propose_outcome(*l, *outcome, *h).await,
+        }
+    }
+
     /// Run every keeper action due now, in order.
     pub async fn run_keeper(&self) -> Vec<(KeeperAction, anyhow::Result<B256>)> {
         let _g = self.keeper_lock.lock().await;
@@ -196,12 +214,7 @@ impl<C: Chain> App<C> {
             {
                 continue;
             }
-            let r = match &a {
-                KeeperAction::Snapshot(l) => self.chain.snapshot(*l).await,
-                KeeperAction::Resolve(l) => self.chain.resolve(*l).await,
-                KeeperAction::Redeem(l, users) => self.chain.redeem(*l, users.clone()).await,
-                KeeperAction::Graduate(l) => self.chain.graduate(*l).await,
-            };
+            let r = self.execute(&a).await;
             match &r {
                 Ok(tx) => {
                     tracing::info!("keeper {a:?}: {tx}");
@@ -304,7 +317,7 @@ impl<C: Chain> App<C> {
         }
     }
 
-    /// Background loops: chain poll + keeper, batch timer, price stream.
+    /// Background loops: chain poll + keeper, batch timer, oracle (Cournot), price stream.
     pub fn spawn_background(self: &Arc<Self>) {
         let app = self.clone();
         tokio::spawn(async move {
@@ -325,6 +338,7 @@ impl<C: Chain> App<C> {
                 let _ = app.run_batch().await;
             }
         });
+        crate::oracle::spawn(self);
         let app = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(PRICE_POLL);

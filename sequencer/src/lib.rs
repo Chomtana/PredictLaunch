@@ -7,7 +7,9 @@
 pub mod api;
 pub mod app;
 pub mod chain;
+pub mod cournot;
 pub mod keeper;
+pub mod oracle;
 pub mod prices;
 pub mod testutil;
 pub mod views;
