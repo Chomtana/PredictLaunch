@@ -166,7 +166,7 @@ pub fn deposit(user: Address, bnb: u128) -> ChainEvent {
     }
 }
 
-/// A signed order (nonce from a global counter so hashes are unique).
+/// A signed order with a unique nonce.
 #[allow(clippy::too_many_arguments)]
 pub fn signed_order(
     d: &Domain,
@@ -188,7 +188,13 @@ pub fn signed_order(
         price,
         amount,
         expiry: u64::MAX / 2,
-        nonce: NONCE.fetch_add(1, Ordering::Relaxed),
+        // Unique across processes too (a replayed chain remembers `filled` per hash).
+        nonce: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64
+            * 1000
+            + NONCE.fetch_add(1, Ordering::Relaxed) % 1000,
     };
     let sig = k.sign(&order_hash(d, &o));
     (o, sig)

@@ -1,0 +1,346 @@
+//! HTTP + WebSocket API (SPEC "Sequencer HTTP/WS API").
+//!
+//! ```text
+//! GET  /api/status   /api/config   /api/launches   /api/launch/{id}   /api/book/{id}
+//! GET  /api/trades/{id}?limit=   /api/prices/{feed}?since=   /api/user/{addr}
+//! POST /api/msgs     [Msg] atomic group (≤ 16)
+//! POST /api/faucet   {address}  (only with --dev-faucet)
+//! POST /api/poke     re-read the chain now (after a deposit / withdraw tx)
+//! WS   /ws           send {sub:{launchId?, user?}}; receive snapshots and price ticks
+//! ```
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use alloy_primitives::{Address, U256};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use bilauncher_core::state::AcceptError;
+use bilauncher_core::{ErrorCode, CUTS, FEEDS, MAX_DURATION, MIN_DURATION, ONE_BNB};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tower_http::cors::CorsLayer;
+
+use crate::app::{now_ms, App};
+use crate::chain::Chain;
+use crate::views;
+
+pub const FAUCET_BNB: u128 = 1000;
+
+pub fn router<C: Chain>(app: Arc<App<C>>) -> Router {
+    Router::new()
+        .route("/api/status", get(status::<C>))
+        .route("/api/config", get(config::<C>))
+        .route("/api/launches", get(launches::<C>))
+        .route("/api/launch/{id}", get(launch::<C>))
+        .route("/api/book/{id}", get(book::<C>))
+        .route("/api/trades/{id}", get(trades::<C>))
+        .route("/api/prices/{feed}", get(prices::<C>))
+        .route("/api/user/{addr}", get(user::<C>))
+        .route("/api/msgs", post(msgs::<C>))
+        .route("/api/faucet", post(faucet::<C>))
+        .route("/api/poke", post(poke::<C>))
+        .route("/ws", get(ws::<C>))
+        .layer(CorsLayer::permissive())
+        .with_state(app)
+}
+
+type AppState<C> = State<Arc<App<C>>>;
+
+fn err(code: StatusCode, error: &str, message: impl Into<String>, index: Option<usize>) -> Response {
+    let mut body = json!({ "error": error, "message": message.into() });
+    if let Some(i) = index {
+        body["index"] = json!(i);
+    }
+    (code, Json(body)).into_response()
+}
+
+fn now() -> u64 {
+    now_ms() / 1000
+}
+
+pub fn config_json<C: Chain>(app: &App<C>) -> Value {
+    let s = &app.settings;
+    json!({
+        "chainId": app.info.chain_id,
+        "rpc": s.public_rpc,
+        "exchange": s.domain.exchange,
+        "factory": s.factory,
+        "portal": s.portal,
+        "saltLockFee": app.info.salt_lock_fee.to_string(),
+        "minTarget": app.info.min_target.to_string(),
+        "cuts": CUTS,
+        "feeds": FEEDS.iter().map(|(sym, a)| json!({"address": a, "symbol": sym})).collect::<Vec<_>>(),
+        "minDuration": MIN_DURATION,
+        "maxDuration": MAX_DURATION,
+        "batchMs": s.batch_ms,
+        "devFaucet": s.dev_faucet,
+        "domain": {
+            "name": "bilauncher",
+            "version": "1",
+            "chainId": s.domain.chain_id,
+            "verifyingContract": s.domain.exchange,
+        },
+    })
+}
+
+async fn config<C: Chain>(State(app): AppState<C>) -> Json<Value> {
+    Json(config_json(&app))
+}
+
+fn status_json<C: Chain>(app: &App<C>) -> Value {
+    let e = app.last_error.lock().unwrap().clone();
+    views::status(&app.state.lock().unwrap(), e.as_deref())
+}
+
+async fn status<C: Chain>(State(app): AppState<C>) -> Json<Value> {
+    Json(status_json(&app))
+}
+
+async fn launches<C: Chain>(State(app): AppState<C>) -> Json<Value> {
+    Json(views::launches(&app.state.lock().unwrap(), now()))
+}
+
+fn launch_json<C: Chain>(app: &App<C>, id: u64) -> Option<Value> {
+    let st = app.state.lock().unwrap();
+    let p = app.prices.lock().unwrap();
+    views::launch_detail(&st, &p, id, now())
+}
+
+async fn launch<C: Chain>(State(app): AppState<C>, Path(id): Path<u64>) -> Response {
+    match launch_json(&app, id) {
+        Some(v) => Json(v).into_response(),
+        None => err(StatusCode::NOT_FOUND, "not_found", "unknown launch", None),
+    }
+}
+
+async fn book<C: Chain>(State(app): AppState<C>, Path(id): Path<u64>) -> Json<Value> {
+    Json(views::book(&app.state.lock().unwrap(), id))
+}
+
+#[derive(Deserialize)]
+struct Q {
+    limit: Option<usize>,
+    since: Option<u64>,
+}
+
+async fn trades<C: Chain>(
+    State(app): AppState<C>,
+    Path(id): Path<u64>,
+    Query(q): Query<Q>,
+) -> Json<Value> {
+    Json(views::trades(
+        &app.state.lock().unwrap(),
+        id,
+        q.limit.unwrap_or(100).min(1000),
+    ))
+}
+
+async fn prices<C: Chain>(
+    State(app): AppState<C>,
+    Path(feed): Path<String>,
+    Query(q): Query<Q>,
+) -> Response {
+    let Ok(feed) = feed.parse::<Address>() else {
+        return err(StatusCode::BAD_REQUEST, "bad_request", "not an address", None);
+    };
+    Json(views::prices(
+        &app.prices.lock().unwrap(),
+        feed,
+        q.since.unwrap_or(0),
+    ))
+    .into_response()
+}
+
+async fn user<C: Chain>(State(app): AppState<C>, Path(addr): Path<String>) -> Response {
+    let Ok(a) = addr.parse::<Address>() else {
+        return err(StatusCode::BAD_REQUEST, "bad_request", "not an address", None);
+    };
+    Json(views::user(&app.state.lock().unwrap(), a)).into_response()
+}
+
+fn accept_err(e: AcceptError) -> Response {
+    err(
+        StatusCode::BAD_REQUEST,
+        e.code.as_str(),
+        e.message,
+        Some(e.index),
+    )
+}
+
+async fn msgs<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> Response {
+    let arr = match &body {
+        Value::Array(a) => a.clone(),
+        Value::Object(o) => match o.get("msgs") {
+            Some(Value::Array(a)) => a.clone(),
+            _ => vec![body.clone()],
+        },
+        _ => return err(StatusCode::BAD_REQUEST, "bad_request", "expected [Msg]", None),
+    };
+    if arr.len() > bilauncher_core::MAX_GROUP {
+        return err(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::GroupTooLarge.as_str(),
+            format!("at most {} messages per group", bilauncher_core::MAX_GROUP),
+            Some(bilauncher_core::MAX_GROUP),
+        );
+    }
+    let mut parsed = Vec::with_capacity(arr.len());
+    for (i, m) in arr.iter().enumerate() {
+        match views::parse_msg(m) {
+            Ok(m) => parsed.push(m),
+            Err(e) => return err(StatusCode::BAD_REQUEST, "bad_request", e, Some(i)),
+        }
+    }
+    match app.submit_group(parsed) {
+        Ok(results) => {
+            let results: Vec<Value> = results
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "orderHash": r.order_hash,
+                        "fills": r.fills.iter().map(|f| json!({
+                            "price": f.price,
+                            "amount": f.amount.to_string(),
+                            "kind": f.kind.name(),
+                        })).collect::<Vec<_>>(),
+                        "resting": r.resting.to_string(),
+                        "omitted": r.omitted,
+                    })
+                })
+                .collect();
+            Json(json!({ "results": results })).into_response()
+        }
+        Err(e) => accept_err(e),
+    }
+}
+
+async fn faucet<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> Response {
+    if !app.settings.dev_faucet {
+        return err(
+            StatusCode::NOT_FOUND,
+            "faucet_disabled",
+            "start the sequencer with --dev-faucet",
+            None,
+        );
+    }
+    let Some(a) = body
+        .get("address")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<Address>().ok())
+    else {
+        return err(StatusCode::BAD_REQUEST, "bad_request", "address required", None);
+    };
+    let amount = U256::from(FAUCET_BNB * ONE_BNB);
+    match app.chain.set_balance(a, amount).await {
+        Ok(()) => Json(json!({ "ok": true, "address": a, "balance": amount.to_string() }))
+            .into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, "faucet_failed", format!("{e:#}"), None),
+    }
+}
+
+async fn poke<C: Chain>(State(app): AppState<C>) -> Response {
+    match app.poll().await {
+        Ok(_) => Json(status_json(&app)).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, "poll_failed", format!("{e:#}"), None),
+    }
+}
+
+// ------------------------------------------------------------------------------- websocket
+
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Sub {
+    #[serde(default, deserialize_with = "de_opt_u64")]
+    pub launch_id: Option<u64>,
+    pub user: Option<Address>,
+}
+
+fn de_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    let v = Option::<Value>::deserialize(d)?;
+    Ok(match v {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.parse().ok(),
+        _ => None,
+    })
+}
+
+fn parse_sub(text: &str) -> Option<Sub> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let inner = v.get("sub").cloned().unwrap_or(v);
+    serde_json::from_value(inner).ok()
+}
+
+async fn ws<C: Chain>(State(app): AppState<C>, up: WebSocketUpgrade) -> Response {
+    up.on_upgrade(move |sock| ws_loop(app, sock))
+}
+
+pub fn snapshot_json<C: Chain>(app: &App<C>, sub: &Sub, version: u64) -> String {
+    let st = app.state.lock().unwrap();
+    let p = app.prices.lock().unwrap();
+    let now = now();
+    let mut v = json!({
+        "type": "snapshot",
+        "version": version,
+        "status": views::status(&st, None),
+        "launches": views::launches(&st, now),
+    });
+    if let Some(id) = sub.launch_id {
+        v["launch"] = views::launch_detail(&st, &p, id, now).unwrap_or(Value::Null);
+        v["book"] = views::book(&st, id);
+        v["trades"] = views::trades(&st, id, 50);
+    }
+    if let Some(u) = sub.user {
+        v["user"] = views::user(&st, u);
+    }
+    v.to_string()
+}
+
+async fn ws_loop<C: Chain>(app: Arc<App<C>>, mut sock: WebSocket) {
+    let mut rx = app.version.subscribe();
+    let mut prices = app.price_tx.subscribe();
+    let mut sub = Sub::default();
+    let mut dirty = true;
+    loop {
+        if dirty {
+            // Coalesce bursts of updates into one push.
+            tokio::time::sleep(Duration::from_millis(15)).await;
+            let v = *rx.borrow_and_update();
+            let text = snapshot_json(&app, &sub, v);
+            if sock.send(Message::Text(text.into())).await.is_err() {
+                return;
+            }
+            dirty = false;
+        }
+        tokio::select! {
+            changed = rx.changed() => {
+                if changed.is_err() { return; }
+                dirty = true;
+            }
+            tick = prices.recv() => match tick {
+                Ok(t) => {
+                    let m = json!({"type": "price", "feed": t.feed, "t": t.t, "price": t.price.to_string()});
+                    if sock.send(Message::Text(m.to_string().into())).await.is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(_) => return,
+            },
+            msg = sock.recv() => match msg {
+                Some(Ok(Message::Text(t))) => {
+                    if let Some(s) = parse_sub(&t) {
+                        sub = s;
+                        dirty = true;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                _ => {}
+            }
+        }
+    }
+}
