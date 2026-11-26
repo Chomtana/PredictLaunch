@@ -10,7 +10,10 @@ Things the SPEC left open, or that the real chain forced, and how the contracts 
    <contract>`, where sender == origin. The authorized-caller mapping is storage **slot 1**:
    `keccak256(abi.encode(caller, uint256(1))) = 1` (same on BTCB, BNB, ANKR; pinned by
    `test/fork/FeedFork.t.sol::test_contractReadsNeedAuthorization`).
-   - Fork: `script/fork-setup.sh` writes that slot for the Exchange on every feed in `script/feeds.json`.
+   - Fork: `script/fork-setup.sh` writes that slot for the Exchange on every feed in `script/feeds.json`
+     (`dev.sh` deploys with `ALL_FEEDS=true`).
+   - Live testnet: `Deploy.s.sol` by default enables only the feeds with a Chainlink fallback, so a launch can't
+     be created on a feed the Exchange can't read.
    - **Live testnet: the Exchange cannot `snapshot` until Atlas authorizes it** (ask the Atlas team to call
      `setAuthorizedCallers([exchange],[true])` on the feed used). Without it `snapshot` reverts, the market goes
      Void at `settleTime + GRACE` and the launch fails (everyone redeems at 0.50), so no graduation.
@@ -25,7 +28,11 @@ Things the SPEC left open, or that the real chain forced, and how the contracts 
    with creation paused. The plan's `test_unopenedFactoryRejected` is therefore impossible; it became
    `test_unopenedFactoryNotGatedOnTestnetPortal`, which pins the observed behaviour (it will fail if Flap adds
    the gate). `test_graduateOnRealPortal` pauses creation and opens the factory, as on mainnet. The dev script
-   still opens the factory (`script/fork-setup.sh`).
+   still opens the factory, the way it works on real testnet: `Deploy.s.sol` calls Flap's testnet whitelist helper
+   `0x77779969a11eff7582f3bCf48135A846A3457777` (`whitelist(factory)`, callable by anyone, enable-only, a later call
+   can overwrite the multiplier) and requires `launcherFactoryMultiplier(factory) == (true, 10000)` afterwards.
+   The fork tests open the factory the same way (`test_whitelistHelperEnablesFactory`,
+   `test_graduateWithHelperEnabledFactory`); only `_pauseCreation` still pranks the Flap admin, to mimic mainnet.
 3. Transfers of the Flap tax token between non-pool addresses are untaxed: the Launcher -> Exchange 500M lands in
    full (`receiveLoserTokens` checks the balance delta).
 

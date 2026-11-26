@@ -11,6 +11,7 @@ import {IPortal} from "src/flap/IPortal.sol";
 import {ILauncherDescription} from "src/flap/ILauncher.sol";
 import {PredictLaunchLauncherFactory} from "src/flap/PredictLaunchLauncherFactory.sol";
 import {PredictLaunchLauncher} from "src/flap/PredictLaunchLauncher.sol";
+import {ITestnetFactoryWhitelist, TESTNET_FACTORY_WHITELIST} from "src/flap/ITestnetFactoryWhitelist.sol";
 
 interface IMintable {
     function mint(address to, uint256 amount) external;
@@ -82,9 +83,11 @@ contract FlapForkTest is Test {
         vm.store(BTCB_FEED, keccak256(abi.encode(address(ex), uint256(1))), bytes32(uint256(1)));
     }
 
+    /// Open the factory the way Deploy.s.sol does on real testnet: Flap's whitelist helper, called by an ordinary
+    /// account (no prank of a Flap admin).
     function _openFactory() internal {
-        vm.prank(IProxyAdminLike(PROXY_ADMIN).owner());
-        portal.setLauncherFactoryMultiplier(address(factory), 10_000, true);
+        vm.prank(creator);
+        ITestnetFactoryWhitelist(TESTNET_FACTORY_WHITELIST).whitelist(address(factory));
     }
 
     /// A salt whose predicted token address ends in 0x7777 (hashing in scratch space, as Flap's ForkBase does).
@@ -157,6 +160,32 @@ contract FlapForkTest is Test {
         _pauseCreation();
         _openFactory();
         _fullFlow(keccak256("predictlaunch-fork"));
+    }
+
+    /// Flap's testnet helper: any account can enable a deployed factory (1x, or a custom multiplier, which a later
+    /// call overwrites), and it refuses an address without code.
+    function test_whitelistHelperEnablesFactory() public {
+        (bool on,) = portal.launcherFactoryMultiplier(address(factory));
+        assertFalse(on, "fresh factory");
+        _openFactory();
+        (bool on1, uint16 bps1) = portal.launcherFactoryMultiplier(address(factory));
+        assertTrue(on1);
+        assertEq(bps1, 10_000);
+
+        vm.prank(alice);
+        ITestnetFactoryWhitelist(TESTNET_FACTORY_WHITELIST).whitelist(address(factory), 5000);
+        (, uint16 bps2) = portal.launcherFactoryMultiplier(address(factory));
+        assertEq(bps2, 5000, "overwritten by anyone");
+
+        vm.prank(alice);
+        vm.expectRevert();
+        ITestnetFactoryWhitelist(TESTNET_FACTORY_WHITELIST).whitelist(alice);
+    }
+
+    /// Creation open (as on live testnet), factory enabled through the helper: the full launch graduates.
+    function test_graduateWithHelperEnabledFactory() public {
+        _openFactory();
+        _fullFlow(keccak256("predictlaunch-fork-helper"));
     }
 
     /// The live testnet Portal has creation open (featureFlags == 0): an unopened factory works end to end there.

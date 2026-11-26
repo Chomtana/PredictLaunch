@@ -44,8 +44,9 @@ scripts/dev.sh --no-frontend   # no Vite (API work, e2e)
 ```
 
 It runs, in order: `anvil --fork-url $BSC_TESTNET_RPC_URL --chain-id 97 --block-time 1` →
-`forge script Deploy` (owner anvil #0, operator anvil #9) → `contracts/script/fork-setup.sh`
-(authorizes the Exchange on every Atlas feed and opens the factory on the Flap Portal) → the feed
+`forge script Deploy` (owner anvil #0, operator anvil #9; enables the factory on the Flap Portal
+through Flap's testnet whitelist helper, exactly as on real testnet) → `contracts/script/fork-setup.sh`
+(fork only: authorizes the Exchange on every Atlas feed with `anvil_setStorageAt`) → the feed
 relay (copies live testnet prices into the fork every 2 s) → the sequencer (`--dev-faucet`) → the
 seed bots (two launches: BTCB, strike = now, settles in 15 min, cut 10%, target 2,150 USDT; BNB,
 strike = now + 1%, settles in 30 min, cut 30%, target 3,000 USDT; a maker and two takers trading around
@@ -59,6 +60,36 @@ public, so bots, the dev faucet and anyone on live testnet can mint it
 need tBNB. The Portal's pool floor is 1,500 USDT, so `minTarget` is 1,500 and every demo amount is
 x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUOTE_TOKEN` and
 `MIN_TARGET` env on `Deploy.s.sol`).
+
+### Real BSC testnet (no fork)
+
+`Deploy.s.sol` uses no cheats, so it deploys to the real testnet as is. It enables the factory on
+the Flap Portal by calling `whitelist(factory)` on Flap's testnet helper
+`0x77779969a11eff7582f3bCf48135A846A3457777` (anyone may call it; it exists on testnet only), then
+reads `Portal.launcherFactoryMultiplier(factory)` back and fails unless it is `(true, 10000)`. By default it
+enables only the feeds with a Chainlink fallback (BTCB, BNB, CAKE, USDT), because the Exchange can't read the
+others until Atlas authorizes it (see Known limitations). The deployer needs about 0.012 tBNB.
+
+```bash
+set -a; . ./.env; set +a
+START_BLOCK=$(cast block-number --rpc-url "$BSC_TESTNET_RPC_URL")
+cd contracts
+OPERATOR=<operator address> QUOTE_TOKEN=0x190C989D5665a0e404B444b53CAE9AbCfb600157 \
+DEPLOY_JSON=../.dev/testnet-deploy.json \
+forge script script/Deploy.s.sol:Deploy --rpc-url "$BSC_TESTNET_RPC_URL" --broadcast \
+  --legacy --with-gas-price 1gwei --private-key <deployer key>      # or --account / --ledger
+# check (should print: true, 10000)
+cast call --rpc-url "$BSC_TESTNET_RPC_URL" 0x000042108465206185A077Edc3F3fd2b49060000 \
+  'launcherFactoryMultiplier(address)(bool,uint16)' $(jq -r .factory ../.dev/testnet-deploy.json)
+```
+
+Leave out `--broadcast` to simulate against live testnet state first. Optional env:
+`FACTORY_MULTIPLIER_BPS` (0..10000, default 10000), and `ALL_FEEDS=true` once Atlas has authorized the
+Exchange. The helper can't disable a factory, but anyone can overwrite its multiplier, so re-check it
+before testing if the multiplier matters. Then run the sequencer against the live RPC, **without**
+`--dev-faucet` (it uses `anvil_setBalance`) and without the feed relay or seed bots (both fork only).
+The operator key needs tBNB for batch gas:
+`target/debug/predictlaunch-sequencer --rpc "$BSC_TESTNET_RPC_URL" --exchange <exchange> --factory <factory> --operator-key <operator key> --start-block "$START_BLOCK" --quote-symbol USDT --oracle-dir .dev/oracle-testnet`.
 
 ### MetaMask
 
@@ -103,14 +134,17 @@ cd frontend && pnpm vitest run
   back to Chainlink for BTCB/USD, BNB/USD, CAKE/USD and USDT/USD (`setFallbackFeed`, set by the
   deploy script; the price is scaled from 8 to 18 decimals and `SnapshotSource` names the source).
   Launches on any other feed can't snapshot: the market goes Void after the grace window, everyone
-  redeems at 0.50 and the launch fails. On the fork, `fork-setup.sh` authorizes the Exchange on
-  Atlas, so Atlas is used.
+  redeems at 0.50 and the launch fails, so by default the deploy script doesn't enable those feeds
+  (`ALL_FEEDS=true` does). On the fork, `dev.sh` deploys with `ALL_FEEDS=true` and `fork-setup.sh`
+  authorizes the Exchange on Atlas, so Atlas is used.
 - **Chart vs settlement prices.** The chart streams the Atlas offchain API (CoinMarketCap-backed,
   ~10 s updates; onchain feed fallback), while settlement always uses the onchain snapshot. On the
   fork the onchain feeds are copied from live testnet every 2 s by the feed relay, so the two agree
   closely but not to the wei.
-- **Flap factory gating.** Flap must enable our factory with `setLauncherFactoryMultiplier` on
-  mainnet; the testnet Portal currently does not enforce it (see `contracts/SPEC-NOTES.md`).
+- **Flap factory gating.** On testnet, `Deploy.s.sol` enables the factory through Flap's public
+  whitelist helper (the testnet Portal does not currently enforce it anyway; see
+  `contracts/SPEC-NOTES.md`). The helper doesn't exist on mainnet, where Flap enables a factory only after
+  an audit, so the deploy script refuses to run there.
 - **The salt lock is taken at creation** (`Portal.newLauncher` charges `SALT_LOCK_FEE` and locks the
   `…7777` salt) while the token launches at graduation, up to 30 days later. Tested with a 10-minute
   gap; whether the Portal expires long-held locks was not checked.

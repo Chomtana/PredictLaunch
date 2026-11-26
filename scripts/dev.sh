@@ -94,14 +94,14 @@ for _ in $(seq 120); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break;
 [ "$(cast chain-id --rpc-url "$RPC" 2>/dev/null)" = 97 ] || fail "anvil did not start" "$DEV/anvil.log"
 START_BLOCK="$(cast block-number --rpc-url "$RPC")"
 
-step "deploying Exchange + PredictLaunchLauncherFactory (owner #0, operator #9, quote $QUOTE_SYMBOL)"
-(cd "$ROOT/contracts" && OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$QUOTE_TOKEN" forge script script/Deploy.s.sol:Deploy \
+step "deploying Exchange + PredictLaunchLauncherFactory, enabling it on the Flap Portal (owner #0, operator #9, quote $QUOTE_SYMBOL)"
+(cd "$ROOT/contracts" && ALL_FEEDS=true OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$QUOTE_TOKEN" forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$RPC" --broadcast --private-key "$DEPLOYER_KEY" 2>&1 | scrub >"$DEV/deploy.log") || fail "deploy" "$DEV/deploy.log"
 EXCHANGE="$(jq -r .exchange "$DEV/deploy.json")"
 FACTORY="$(jq -r .factory "$DEV/deploy.json")"
 echo "exchange $EXCHANGE  factory $FACTORY  (from block $START_BLOCK)"
 
-step "fork setup: authorize the Exchange on the Atlas feeds, open the factory on the Flap Portal"
+step "fork setup: authorize the Exchange on the Atlas feeds"
 "$ROOT/contracts/script/fork-setup.sh" "$RPC" "$DEV/deploy.json" 2>&1 | scrub
 
 step "starting the feed relay (live testnet prices -> fork, every 2 s)"
