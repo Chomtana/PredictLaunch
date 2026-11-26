@@ -223,6 +223,48 @@ contract BatchTest is Base {
         assertEq(ex.batchCount(), 2);
     }
 
+    /// A signed cancel in a batch lands after its fills: the earlier partial fill settles, the rest is dead.
+    function test_cancelInBatch() public {
+        Eip712.Order memory a = _o(alice, 0, 0, 50, 2e18);
+        bytes32 ah = ex.orderHash(a);
+        Exchange.Batch memory b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(a)), _fills1(0, 1, 1, 1e18));
+        b.cancels = new Exchange.SignedCancel[](1);
+        b.cancels[0] = _cancel(a, 1, _pk(alice));
+        vm.expectEmit(address(ex));
+        emit Exchange.OrderCancelled(alice, ah);
+        _submit(b);
+        assertTrue(ex.cancelled(ah));
+        assertEq(ex.filled(ah), 1e18);
+        // the remaining 1e18 can no longer be filled, by anyone
+        _expectFillRevert(_o(carol, 1, 0, 50, 1e18), a, 1, 1e18, Exchange.OrderDead.selector);
+        // landing the same cancel again is a no-op, not a revert
+        Exchange.Batch memory again = _emptyBatch(ex.withdrawProcessed());
+        again.cancels = b.cancels;
+        vm.prank(carol);
+        ex.submitBatch(again);
+    }
+
+    function test_cancelSignerRules() public {
+        Eip712.Order memory a = _o(alice, 0, 0, 50, 1e18);
+        Exchange.Batch memory b = _emptyBatch(0);
+        b.cancels = new Exchange.SignedCancel[](1);
+        // someone else cannot cancel Alice's order
+        b.cancels[0] = _cancel(a, 1, _pk(bob));
+        vm.expectRevert(Exchange.BadSignature.selector);
+        ex.submitBatch(b);
+        // a live trading key of Alice's can; an expired one cannot
+        uint256 keyPk = 0xCA11;
+        vm.prank(alice);
+        ex.authorizeKey(vm.addr(keyPk), uint64(vm.getBlockTimestamp() + 10));
+        b.cancels[0] = _cancel(a, 1, keyPk);
+        vm.warp(vm.getBlockTimestamp() + 11);
+        vm.expectRevert(Exchange.BadSignature.selector);
+        ex.submitBatch(b);
+        vm.warp(vm.getBlockTimestamp() - 1);
+        ex.submitBatch(b);
+        assertTrue(ex.cancelled(ex.orderHash(a)));
+    }
+
     function test_keyAuthInBatch() public {
         uint256 keyPk = 0x4E7;
         address key = vm.addr(keyPk);

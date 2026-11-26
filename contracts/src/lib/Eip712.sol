@@ -29,7 +29,7 @@ library Eip712 {
     );
     bytes32 internal constant AUTHORIZE_KEY_TYPEHASH =
         keccak256("AuthorizeKey(address owner,address key,uint64 expiry,uint64 nonce)");
-    /// Offchain only (the sequencer verifies it); the contract never sees offchain cancels.
+    /// Signed offchain, sent to the sequencer, which carries it onchain in the next batch (`Batch.cancels`).
     bytes32 internal constant CANCEL_TYPEHASH = keccak256("Cancel(address owner,bytes32 orderHash,uint64 nonce)");
 
     function domainSeparator(uint256 chainId, address verifyingContract) internal pure returns (bytes32) {

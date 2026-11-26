@@ -86,6 +86,16 @@ abstract contract Base is Test {
         return Exchange.SignedOrder(o, abi.encodePacked(r, s, v));
     }
 
+    function _cancel(Eip712.Order memory o, uint64 nonce, uint256 pk)
+        internal
+        view
+        returns (Exchange.SignedCancel memory)
+    {
+        bytes32 h = Eip712.hashCancel(ex.DOMAIN_SEPARATOR(), o.owner, ex.orderHash(o), nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, h);
+        return Exchange.SignedCancel(o, nonce, abi.encodePacked(r, s, v));
+    }
+
     function _s(Eip712.Order memory o) internal view returns (Exchange.SignedOrder memory) {
         return _sign(o, _pk(o.owner));
     }

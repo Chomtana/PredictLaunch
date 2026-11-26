@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use alloy_primitives::{Address, B256, U256};
 
 use crate::abi;
-use crate::batcher::{self, FillRec, KeyRec, OrderData, PendingBatch};
+use crate::batcher::{self, CancelRec, FillRec, KeyRec, OrderData, PendingBatch};
 use crate::book::{self, Book, BookError, RestingOrder};
 use crate::eip712::{authorize_key_hash, cancel_hash, order_hash, recover, Domain, KeyAuthMsg};
 use crate::types::*;
@@ -1291,6 +1291,22 @@ impl State {
         let ids: HashSet<u64> = b.fills.iter().map(|f| f.id).collect();
         self.trades.retain(|t| !ids.contains(&t.fill_id));
         self.soft_reversals += 1;
+        // The cancels still stand: queue them again (unless already onchain or no longer signable).
+        let now = now_ms / 1000;
+        let retry: Vec<CancelRec> = b
+            .cancels
+            .into_iter()
+            .filter(|c| !self.cancelled.contains(&c.order_hash))
+            .filter(|c| {
+                self.orders.get(&c.order_hash).is_some_and(|e| {
+                    c.signer == e.order.owner
+                        || self.key_expiry(e.order.owner, c.signer).is_some_and(|x| x >= now)
+                })
+            })
+            .collect();
+        for c in retry {
+            self.push_cancel(c, now_ms);
+        }
         self.rebuild();
         self.drop_settled(now_ms);
     }
@@ -1411,6 +1427,16 @@ impl State {
                     return Err(rej(ErrorCode::UnknownOrder, "order does not rest"));
                 }
                 self.cancel_resting(&oh);
+                // Binding onchain too: the next batch carries it, so nobody can fill the rest later.
+                self.push_cancel(
+                    CancelRec {
+                        order_hash: oh,
+                        nonce,
+                        sig,
+                        signer,
+                    },
+                    now_ms,
+                );
                 Ok(MsgResult {
                     order_hash: Some(oh),
                     ..Default::default()
@@ -1561,6 +1587,17 @@ impl State {
         for h in dead {
             self.remove_resting(&h);
         }
+    }
+
+    fn push_cancel(&mut self, rec: CancelRec, now_ms: u64) {
+        if self
+            .batches
+            .back()
+            .is_some_and(|b| !b.sealed && b.cancels.len() >= MAX_BATCH_FILLS)
+        {
+            self.seal_back();
+        }
+        self.open_batch(now_ms).cancels.push(rec);
     }
 
     fn push_fill(&mut self, rec: FillRec, settle: u64, now_ms: u64) {

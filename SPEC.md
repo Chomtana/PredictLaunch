@@ -73,7 +73,7 @@ scripts/     dev.sh (fork demo), e2e.sh
 Order(address owner,uint256 launchId,uint32 round,uint8 outcome,uint8 side,uint8 price,uint128 amount,uint64 expiry,uint64 nonce)
     outcome 0=Up 1=Down; side 0=Buy 1=Sell; price 1..99; amount multiple of 1e16
 AuthorizeKey(address owner,address key,uint64 expiry,uint64 nonce)     signed by owner only
-Cancel(address owner,bytes32 orderHash,uint64 nonce)                    offchain only (sequencer), owner or key
+Cancel(address owner,bytes32 orderHash,uint64 nonce)                    sent to the sequencer, carried onchain in the next batch; owner or key
 ```
 `orderHash` = the EIP-712 digest of the Order. A signature is valid if `recover == owner`, or
 `recover` is a key with `keyExpiry[owner][key] >= batch.ts`.
@@ -124,8 +124,9 @@ function claimTokens(uint256 launchId) external;                     // Graduate
 // batches
 struct SignedOrder { Order order; bytes sig; }
 struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
+struct SignedCancel { Order order; uint64 nonce; bytes sig; }      // the signed Cancel, with its order (whose owner it binds)
 struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; } // kind 0 Transfer 1 Mint 2 Merge; indexes into orders
-struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
+struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; SignedCancel[] cancels; uint64 withdrawTo; }
 function submitBatch(Batch calldata b) external;                     // permissionless
 
 // views
@@ -195,7 +196,8 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
 - Batch (permissionless: anyone may submit one, e.g. users trading among themselves while the
   sequencer is down): every check runs at `block.timestamp` (order and key expiry, tradability);
-  apply keys, then fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid
+  apply keys, then fills in order, then cancels (signed by the order's owner or a live key of the
+  owner; an already-cancelled order is skipped, so a duplicate never reverts), then withdrawals `[withdrawProcessed, withdrawTo)` paid
   `min(requested, balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any
   failed check reverts the whole batch, except a fill whose market has closed (skipped,
   `FillSkipped(batchId, index, 0)`) and an unfunded payer (below). A submitter racing the

@@ -641,3 +641,44 @@ fn identical_foreign_batch_counts_as_ours() {
     assert_eq!(w.s.trades.len(), 1);
     check_invariants(&w);
 }
+
+/// A cancel is carried onchain in the next batch (with its order), survives a failed batch, and
+/// settles once the chain reports it.
+#[test]
+fn cancel_goes_onchain_in_batch() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    // Alice rests 2, Bob takes 1: the order is now public in the batch calldata.
+    w.place(&alice, 0, Up, Buy, 60, 2 * E18, T0).unwrap();
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    let o = w.s.orders.values().find(|e| e.order.owner == alice.address()).unwrap().order.clone();
+    let h = order_hash(&domain(), &o);
+    w.s.accept_group(vec![cancel_msg(&alice, &o, false)], ms(T0 + 1)).unwrap();
+    let b = w.s.cut(ms(T0 + 3)).unwrap();
+    assert_eq!(b.fills.len(), 1);
+    assert_eq!(b.cancels.len(), 1);
+    assert_eq!(b.cancels[0].order.owner, alice.address());
+    // The batch fails: its fill is reversed, the cancel is queued again.
+    w.s.on_batch_failed(ms(T0 + 4));
+    let b = w.s.cut(ms(T0 + 7)).unwrap();
+    assert!(b.fills.is_empty());
+    assert_eq!(b.cancels.len(), 1);
+    w.s.apply_events(
+        vec![
+            ChainEvent::OrderCancelled {
+                owner: alice.address(),
+                order_hash: h,
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 1,
+                ts: T0 + 8,
+                fills: 0,
+                batch: Some(b),
+            },
+        ],
+        ms(T0 + 8),
+    );
+    assert!(w.s.cancelled.contains(&h));
+    assert!(w.s.cut(ms(T0 + 20)).is_none(), "nothing left to send");
+    assert!(w.s.books[&0].is_empty());
+}

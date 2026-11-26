@@ -41,9 +41,11 @@ alloy_sol_types::sol! {
     #[derive(Debug, PartialEq, Eq)]
     struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
     #[derive(Debug, PartialEq, Eq)]
+    struct SignedCancel { Order order; uint64 nonce; bytes sig; }
+    #[derive(Debug, PartialEq, Eq)]
     struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; }
     #[derive(Debug, PartialEq, Eq)]
-    struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
+    struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; SignedCancel[] cancels; uint64 withdrawTo; }
 
     #[derive(Debug, PartialEq, Eq)]
     struct LaunchConfig {

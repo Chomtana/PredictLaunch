@@ -131,6 +131,14 @@ contract Exchange is Ownable, ReentrancyGuard {
         bytes sig;
     }
 
+    /// An offchain `Cancel(owner, orderHash, nonce)` signed by the order's owner or one of its live keys, carried
+    /// with the order itself so the contract knows whose order it is.
+    struct SignedCancel {
+        Eip712.Order order;
+        uint64 nonce;
+        bytes sig;
+    }
+
     /// kind 0 Transfer, 1 Mint, 2 Merge; taker/maker index into `Batch.orders`.
     struct Fill {
         uint16 taker;
@@ -143,6 +151,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         KeyAuth[] keys;
         SignedOrder[] orders;
         Fill[] fills;
+        SignedCancel[] cancels;
         uint64 withdrawTo;
     }
 
@@ -518,6 +527,23 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit KeyAuthorized(k.owner, k.key, k.expiry);
     }
 
+    /// @dev A signed cancel carried in a batch. Idempotent: an order already cancelled (e.g. by another submitter
+    ///      landing the same cancel first) is skipped, so a duplicate never reverts the batch.
+    function _applyCancel(SignedCancel calldata c, uint64 ts) internal {
+        bytes32 oh = orderHash(c.order);
+        if (cancelled[oh]) return;
+        address owner_ = c.order.owner;
+        bytes32 h = Eip712.hashCancel(DOMAIN_SEPARATOR, owner_, oh, c.nonce);
+        (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, c.sig);
+        if (err != ECDSA.RecoverError.NoError || signer == address(0)) revert BadSignature();
+        if (signer != owner_) {
+            uint64 exp = keyExpiry[owner_][signer];
+            if (exp == 0 || exp < ts) revert BadSignature();
+        }
+        cancelled[oh] = true;
+        emit OrderCancelled(owner_, oh);
+    }
+
     // ---------------------------------------------------------------------------------------------------------
     // Launches: registration, settlement snapshot, resolution
     // ---------------------------------------------------------------------------------------------------------
@@ -830,6 +856,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     ///         valid fills land and in what order. The sequencer matches the orders it is sent; another submitter
     ///         racing it can make the sequencer's batch revert (Overfill), and the sequencer drops those fills.
     ///         A fill whose market closed before the batch landed is skipped (`FillSkipped`), not reverted.
+    ///         Order: key authorizations, orders and fills, cancels, withdrawals.
     function submitBatch(Batch calldata b) external nonReentrant {
         uint64 ts = uint64(block.timestamp);
         uint64 id = ++batchCount;
@@ -847,6 +874,10 @@ contract Exchange is Ownable, ReentrancyGuard {
             Fill calldata f = b.fills[i];
             if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
             _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, ts, i);
+        }
+        // after the fills: a fill matched before the cancel still lands, nothing after it can
+        for (uint256 i; i < b.cancels.length; ++i) {
+            _applyCancel(b.cancels[i], ts);
         }
 
         uint64 to = b.withdrawTo;
