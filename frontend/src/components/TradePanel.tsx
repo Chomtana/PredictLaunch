@@ -26,14 +26,22 @@ export interface TradePanelProps {
   labels?: OutcomeLabels
 }
 
-const PRESETS: [string, bigint][] = [
+// Stake presets in the quote token: BNB-sized amounts for native BNB, dollar amounts for a USD token.
+const E18 = 10n ** 18n
+const BNB_PRESETS: [string, bigint][] = [
   ['0.05', 5n * 10n ** 16n],
   ['0.25', 25n * 10n ** 16n],
-  ['1', 10n ** 18n],
+  ['1', E18],
+]
+const USD_PRESETS: [string, bigint][] = [
+  ['5', 5n * E18],
+  ['10', 10n * E18],
+  ['50', 50n * E18],
 ]
 export function TradePanel(p: TradePanelProps) {
   const NAME = (p.labels ?? PRICE_LABELS).names
   const { symbol: q } = useQuote()
+  const PRESETS = q.toUpperCase() === 'BNB' ? BNB_PRESETS : USD_PRESETS
   const [side, setSide] = useState<0 | 1>(0)
   const [outcome, setOutcome] = useState<Outcome>(0)
   const [mode, setMode] = useState<'market' | 'limit'>('market')
