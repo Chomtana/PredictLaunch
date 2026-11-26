@@ -198,9 +198,15 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   sequencer is down): every check runs at `block.timestamp` (order and key expiry, tradability);
   apply keys, then fills in order, then cancels (signed by the order's owner or a live key of the
   owner; an already-cancelled order is skipped, so a duplicate never reverts), then withdrawals `[withdrawProcessed, withdrawTo)` paid
-  `min(requested, balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any
-  failed check reverts the whole batch, except a fill whose market has closed (skipped,
-  `FillSkipped(batchId, index, 0)`) and an unfunded payer (below). A submitter racing the
+  `min(requested, balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`).
+  Failure-tolerant: a check that depends on state others can move before the batch lands skips
+  just that item instead of reverting the batch, so a submitter racing the sequencer cannot sink
+  it. A fill is skipped (`FillSkipped(batchId, index, user)`) when its market has closed (`user`
+  = 0), an order can no longer trade (expired, signature or key no longer valid, cancelled, below
+  `minNonce`, would overfill; `user` = its owner), or a payer is short of quote or shares; an
+  already-used key authorization and an already-cancelled order are no-ops. Only a malformed batch
+  (bad indexes, bad order fields, an impossible cross, a forged signature on a key auth or cancel)
+  reverts. A submitter racing the
   sequencer can make its batch revert (e.g. `Overfill`); the sequencer drops those fills.
 - Approve-only trading (ERC20 quote only; native mode keeps internal balances): a payer's cost is
   taken from `balanceOf` first and the rest pulled from the wallet with `transferFrom` (the user

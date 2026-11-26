@@ -587,8 +587,8 @@ fn funds_snapshot_overrides_balance_and_enforces_locks() {
     assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
 }
 
-/// Permissionless `submitBatch`: a third party lands a different fill of the same two orders first,
-/// so ours reverts (Overfill). Only the third party's fill counts.
+/// Permissionless `submitBatch`: a third party lands a different fill of the same two orders first.
+/// Ours still lands, with that fill skipped onchain (it would overfill). Only the third party's counts.
 #[test]
 fn foreign_batch_frontruns_ours() {
     let mut w = W::new(2000);
@@ -607,7 +607,22 @@ fn foreign_batch_frontruns_ours() {
         }],
         ms(T0 + 4),
     );
-    w.s.on_batch_failed(ms(T0 + 5));
+    w.s.apply_events(
+        vec![
+            ChainEvent::FillSkipped {
+                batch_id: 2,
+                index: 0,
+                user: bob.address(),
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 2,
+                ts: T0 + 5,
+                fills: 1,
+                batch: Some(ours),
+            },
+        ],
+        ms(T0 + 5),
+    );
     assert_eq!(w.s.pending_fills(), 0);
     assert_eq!(w.s.confirmed.pairs(0), E18 / 2);
     assert_eq!(w.s.ledger.pairs(0), E18 / 2, "our fill is gone");
@@ -630,12 +645,27 @@ fn identical_foreign_batch_counts_as_ours() {
             batch_id: 1,
             ts: T0 + 4,
             fills: 1,
-            batch: Some(ours),
+            batch: Some(ours.clone()),
         }],
         ms(T0 + 4),
     );
-    // Our own copy then reverts (Overfill); nothing is in flight any more, so nothing changes.
-    w.s.on_batch_failed(ms(T0 + 5));
+    // Our own copy then lands with its fill skipped (it would overfill): nothing changes.
+    w.s.apply_events(
+        vec![
+            ChainEvent::FillSkipped {
+                batch_id: 2,
+                index: 0,
+                user: bob.address(),
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 2,
+                ts: T0 + 5,
+                fills: 1,
+                batch: Some(ours),
+            },
+        ],
+        ms(T0 + 5),
+    );
     assert_eq!(w.s.confirmed.pairs(0), E18);
     assert_eq!(w.s.ledger.pairs(0), E18);
     assert_eq!(w.s.trades.len(), 1);

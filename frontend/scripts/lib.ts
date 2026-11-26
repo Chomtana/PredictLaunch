@@ -265,7 +265,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
   }
 
   /**
-   * Give `b` a fresh trading key. Also the recovery path: a batch the chain refuses (e.g. Overfill) takes the
+   * Give `b` a fresh trading key. Also the recovery path: a batch the chain refuses takes the
    * keys it was authorizing with it, after which every order signed by the old key is `bad_signature`.
    */
   async function authorize(b: Bot) {

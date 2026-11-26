@@ -152,6 +152,23 @@ abstract contract Base is Test {
         ex.submitBatch(b);
     }
 
+    /// The fill lands as a no-op: `FillSkipped(next batch, 0, user)` and no Trade.
+    function _expectFillSkipped(
+        Eip712.Order memory taker,
+        Eip712.Order memory maker,
+        uint8 kind,
+        uint128 amount,
+        address user
+    ) internal {
+        Exchange.Batch memory b = _batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
+        uint64 next = ex.batchCount() + 1;
+        uint128 tf = ex.filled(ex.orderHash(taker));
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(next, 0, user);
+        _submit(b);
+        assertEq(ex.filled(ex.orderHash(taker)), tf, "skipped fill changed nothing");
+    }
+
     /// Mint `amount` pairs: `up` buys Up at `pu`, `down` buys Down at 100 - pu.
     function _mint(address up, address down, uint8 pu, uint128 amount) internal {
         _fill(_o(down, 1, 0, 100 - pu, amount), _o(up, 0, 0, pu, amount), 1, amount);
