@@ -122,7 +122,7 @@ for _ in $(seq 240); do curl -sf "$API/api/status" >/dev/null && break; kill -0 
 curl -sf "$API/api/status" >/dev/null || fail "sequencer" "$DEV/sequencer.log"
 
 if [ $SEED = 1 ]; then
-  step "seeding 2 launches and 3 bots (anvil #5 maker, #6/#7 takers)"
+  step "seeding a round of launches and 3 bots (anvil #5 maker, #6/#7 takers)"
   (cd "$ROOT/frontend" && exec node --experimental-strip-types --no-warnings scripts/seed.ts \
     --rpc "$RPC" --api "$API" --deploy "$DEV/deploy.json" $([ $LIVE = 1 ] && echo --live)) >"$DEV/seed.log" 2>&1 &
   SEED_PID=$!

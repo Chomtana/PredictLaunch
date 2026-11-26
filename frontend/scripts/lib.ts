@@ -34,6 +34,7 @@ export const FEEDS = {
   BTCB: '0xe20536bc715aac6560394e33deb66ed205aeec33' as Address,
   BNB: '0x3957d289ee9c38272377786787ea34f9dd29788d' as Address,
   BTC: '0x83b2f2c20df36f166cf5b3f017204cbb7babcad0' as Address,
+  ETH: '0x35369decd8c662954b3d24acc2a862c708a34fd2' as Address,
 }
 
 export const feedAbi = parseAbi([
@@ -290,6 +291,13 @@ export function tomorrowLabel(now = Date.now()): string {
 export function oracleCents(p: number | null | undefined): number {
   if (p == null || !Number.isFinite(p)) return 50
   return Math.min(97, Math.max(3, Math.round(p * 100)))
+}
+
+/** `price` (18-dec) moved by `offBps` basis points, rounded to the nearest multiple of `step` (18-dec, > 0). */
+export function niceStrike(price: bigint, offBps: number, step: bigint): bigint {
+  const moved = (price * BigInt(10_000 + offBps)) / 10_000n
+  const k = (moved + step / 2n) / step
+  return (k > 0n ? k : 1n) * step
 }
 
 /** Standard normal CDF (Abramowitz–Stegun 7.1.26). */

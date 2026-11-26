@@ -3,24 +3,27 @@
 //   node --experimental-strip-types scripts/seed.ts --api http://127.0.0.1:8787 \
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
-// Creates 2 launches through Portal.newLauncher + our factory (anvil #3 is the creator):
-//   BTC: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB (2,150 USDT)
-//   BNB:  strike = current price + 1%, settles in 30 min, cut 30%, target 3 BNB (3,000 USDT)
-// Plus one question launch (SPEC "Question launches"): resolves "Will it rain in Boston on <tomorrow>?"
-// through /api/cournot/resolve, takes the first market, settles in 20 min, cut 10%, target 2.15 BNB;
-// skipped (logged) when resolve fails or finds nothing. Its bots quote around the Cournot opening
-// probability (round(p × 100), clamped 3..97; 50 until the sequencer has one) instead of fairUpCents.
+// Each round creates 2-3 price launches and 1-2 Cournot question launches through Portal.newLauncher +
+// our factory (anvil #3 is the creator), picked at random from scripts/seed-catalog.ts:
+//   price:    a random BTC/BNB/ETH meme (name, symbol, coin icon), strike = live price -0.3%..+0.5% rounded
+//             to a nice number, settles in 10-30 min, random cut 10-30%, target 2.15-4 BNB (x1000 USDT)
+//   question: a random real-world theme (weather, Fed, Starship, football...) searched on Cournot through
+//             /api/cournot/resolve; the best market's exact title becomes the question, with a meme name and
+//             a matching photo. Settles in 15-30 min. A theme with no market is skipped (logged).
+// Question bots quote around the Cournot opening probability (round(p x 100), clamped 3..97); until the
+// sequencer has it, around the market's live yes price from resolve, else 50.
 // With a USDT quote (deploy.json quoteToken) every amount is x1000 (S.K) and bots mint their USDT.
 // Funds 3 bots (anvil #5 maker, #6 and #7 takers), deposits, authorizes one trading key each, and
 // seeds the books. --live keeps going: the maker re-quotes both sides around
 // pUp = Φ((price − strike) / (σ·price·sqrt(timeLeft))) every few seconds and the takers cross it, so
 // open interest passes each target before settlement. When no launch is tradable any more, a new
-// pair of launches is created so the demo never goes quiet.
+// round is created so the demo never goes quiet.
 
 import { privateKeyToAccount } from 'viem/accounts'
 import { parseEther } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
-import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
+import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
+import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, pick, shuffle, type Asset, type Meme } from './seed-catalog.ts'
 
 const RPC = arg('rpc', 'http://127.0.0.1:8545')!
 const API = arg('api', 'http://127.0.0.1:8787')!
@@ -42,59 +45,104 @@ interface Mkt {
   cutBps: number
   /** question launches: the Cournot opening price in cents, once the sequencer has it */
   oracleCents?: number | null
+  /** question launches: the market's live yes price (cents) from resolve, quoted until the opening is known */
+  resolveCents?: number | null
 }
 
-async function createPair(): Promise<Mkt[]> {
+/** Symbols already launched this session; a meme is reused only once its list runs out. */
+const used = new Set<string>()
+function freshMeme(memes: Meme[]): Meme {
+  const fresh = memes.filter((m) => !used.has(m.symbol))
+  const m = pick(fresh.length ? fresh : memes)
+  used.add(m.symbol)
+  return m
+}
+
+const CUTS = [1000, 1500, 2000, 2500, 3000]
+/** Strike vs the live price, in bps: mostly near the money so both sides trade. */
+const STRIKE_OFFSETS = [-30, -15, 0, 0, 10, 20, 35, 50]
+
+async function createPrice(asset: Asset): Promise<Mkt> {
   const now = await S.chainNow()
-  const btc = await S.feedPrice(FEEDS.BTC)
-  const bnb = await S.feedPrice(FEEDS.BNB)
-  const defs = [
-    { name: 'Bitcoin Believer', symbol: 'BELIEVE', feed: FEEDS.BTC, strike: btc, settleTime: now + 15n * 60n, cutBps: 1000, target: parseEther('2.15') * K },
-    { name: 'BNB Moon', symbol: 'BMOON', feed: FEEDS.BNB, strike: (bnb * 101n) / 100n, settleTime: now + 30n * 60n, cutBps: 3000, target: parseEther('3') * K },
-  ]
-  const out: Mkt[] = []
-  for (const d of defs) {
-    const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: '', question: '', marketId: 0n })
-    console.log(`seed: launch #${id} ${d.symbol} token ${token} strike ${Number(d.strike) / 1e18} settles in ${Number(d.settleTime - now)} s`)
-    out.push({ id, rail, strike: d.strike, settleTime: d.settleTime, feed: d.feed, target: d.target, cutBps: d.cutBps })
+  const feed = FEEDS[asset]
+  const minutes = pick([10, 12, 15, 20, 25, 30])
+  const d = {
+    ...freshMeme(PRICE_MEMES[asset]),
+    feed,
+    strike: niceStrike(await S.feedPrice(feed), pick(STRIKE_OFFSETS), parseEther(String(STRIKE_STEP[asset]))),
+    settleTime: now + BigInt(minutes * 60),
+    cutBps: pick(CUTS),
+    // bigger raises only when there is time to fill them
+    target: parseEther(pick(minutes >= 20 ? ['2.15', '2.5', '3', '3.5', '4'] : ['2.15', '2.5', '3'])) * K,
   }
-  return out
+  const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: ICONS[asset], question: '', marketId: 0n })
+  console.log(`seed: launch #${id} $${d.symbol} "${d.name}" ${asset} >= ${Number(d.strike) / 1e18} in ${minutes} min, cut ${d.cutBps / 100}%, token ${token}`)
+  return { id, rail, strike: d.strike, settleTime: d.settleTime, feed, target: d.target, cutBps: d.cutBps }
 }
 
-/** One question launch on tomorrow's Boston rain market, or null (logged) when Cournot has none. */
+interface ResolvedMarket {
+  id: number | string
+  title: string
+  yesPrice?: number | null
+}
+
+let lastResolve = 0
+/** /api/cournot/resolve, spaced past the sequencer's per-IP limit (one call every 2 s). */
+async function resolve(message: string): Promise<ResolvedMarket[]> {
+  const wait = lastResolve + 2200 - Date.now()
+  if (wait > 0) await sleep(wait)
+  lastResolve = Date.now()
+  const r = await S.post<{ markets?: ResolvedMarket[] }>('/api/cournot/resolve', { message })
+  return r.markets ?? []
+}
+
+/** A question launch on a random catalog theme, or null (logged) when Cournot has no market for it. */
 async function createQuestion(): Promise<Mkt | null> {
-  const question = `Will it rain in Boston on ${tomorrowLabel()}?`
-  let marketId: bigint
-  try {
-    const r = await S.post<{ markets?: { id: number | string; title: string }[] }>('/api/cournot/resolve', { message: question })
-    const first = r.markets?.[0]
-    if (!first) {
-      console.log(`seed: no Cournot market for "${question}"; skipping the question launch`)
+  for (const theme of shuffle(QUESTIONS).slice(0, 4)) {
+    const search = theme.search.replace('{tomorrow}', tomorrowLabel())
+    let market: ResolvedMarket | undefined
+    try {
+      market = (await resolve(search)).find((m) => m.title && Buffer.byteLength(m.title) <= 280)
+    } catch (e) {
+      console.log(`seed: Cournot resolve failed for "${search}" (${(e as Error).message.split('\n')[0]})`)
+      continue
+    }
+    if (!market) {
+      console.log(`seed: no Cournot market for "${search}"; trying another theme`)
+      continue
+    }
+    const now = await S.chainNow()
+    const minutes = pick([15, 20, 25, 30])
+    const d = {
+      ...freshMeme(theme.memes),
+      feed: NATIVE,
+      strike: 0n,
+      settleTime: now + BigInt(minutes * 60),
+      cutBps: pick(CUTS),
+      target: parseEther(pick(['2.15', '2.5', '3'])) * K,
+    }
+    try {
+      const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: pick(theme.images), question: market.title, marketId: BigInt(market.id) })
+      console.log(`seed: question launch #${id} $${d.symbol} "${d.name}": "${market.title}" in ${minutes} min, token ${token}`)
+      const resolveCents = market.yesPrice == null ? null : oracleCents(market.yesPrice)
+      return { id, rail, strike: 0n, settleTime: d.settleTime, feed: NATIVE, target: d.target, cutBps: d.cutBps, oracleCents: null, resolveCents }
+    } catch (e) {
+      console.log(`seed: question launch failed: ${(e as Error).message.split('\n')[0]}`)
       return null
     }
-    marketId = BigInt(first.id)
-    console.log(`seed: Cournot market #${first.id} "${first.title}"`)
-  } catch (e) {
-    console.log(`seed: Cournot resolve failed (${(e as Error).message.split('\n')[0]}); skipping the question launch`)
-    return null
   }
-  const now = await S.chainNow()
-  const d = { name: 'Boston Rain', symbol: 'RAIN', feed: NATIVE, strike: 0n, settleTime: now + 20n * 60n, cutBps: 1000, target: parseEther('2.15') * K }
-  try {
-    const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: '', question, marketId })
-    console.log(`seed: question launch #${id} ${d.symbol} token ${token} market ${marketId} settles in ${Number(d.settleTime - now)} s`)
-    return { id, rail, strike: 0n, settleTime: d.settleTime, feed: NATIVE, target: d.target, cutBps: d.cutBps, oracleCents: null }
-  } catch (e) {
-    console.log(`seed: question launch failed: ${(e as Error).message.split('\n')[0]}`)
-    return null
-  }
+  console.log('seed: no Cournot theme matched a market; this round has no question launch')
+  return null
 }
 
-/** Price pair + the question launch (if Cournot has a market). */
+/** One round: 2-3 price launches on distinct assets + 1-2 question launches. */
 async function createAll(): Promise<Mkt[]> {
-  const out = await createPair()
-  const q = await createQuestion()
-  if (q) out.push(q)
+  const out: Mkt[] = []
+  for (const asset of shuffle<Asset>(['BTC', 'BNB', 'ETH']).slice(0, pick([2, 3]))) out.push(await createPrice(asset))
+  for (let i = pick([1, 2]); i > 0; i--) {
+    const q = await createQuestion()
+    if (q) out.push(q)
+  }
   return out
 }
 
@@ -137,7 +185,7 @@ async function questionFair(m: Mkt): Promise<number> {
       /* not indexed yet */
     }
   }
-  if (p == null) return 50
+  if (p == null) return m.resolveCents ?? 50
   m.oracleCents = oracleCents(p)
   console.log(`seed: #${m.id} Cournot opening ${(p * 100).toFixed(1)}% -> quoting around ${m.oracleCents}¢`)
   return m.oracleCents
@@ -173,7 +221,7 @@ async function main() {
       if (open.length === 0) {
         const anyActive = (await S.get<{ tradable?: boolean }[]>('/api/launches')).some((l) => l.tradable)
         if (!anyActive) {
-          console.log('seed: every launch settled; creating a new set')
+          console.log('seed: every launch settled; creating a new round')
           mkts = await createAll()
         }
         continue
