@@ -163,8 +163,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     address public factory;
-    /// The project's own sequencers. Informational only: `submitBatch` is open to anyone.
-    mapping(address => bool) public operators;
     mapping(address => bool) public feedEnabled;
     /// Atlas feed => Chainlink AggregatorV3 read by `snapshot` when the Atlas feed reverts or answers <= 0.
     mapping(address => address) public fallbackFeed;
@@ -207,7 +205,6 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     event FactorySet(address factory);
     event ExtraFactorySet(address factory, bool on);
-    event OperatorSet(address op, bool on);
     event FeedSet(address feed, bool enabled);
     event MinTargetSet(uint256 minTarget);
     event Deposited(address user, uint256 amount);
@@ -326,11 +323,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     function setExtraFactory(address f, bool on) external onlyOwner {
         extraFactory[f] = on;
         emit ExtraFactorySet(f, on);
-    }
-
-    function setOperator(address op, bool on) external onlyOwner {
-        operators[op] = on;
-        emit OperatorSet(op, on);
     }
 
     function setFeed(address feed, bool enabled) external onlyOwner {

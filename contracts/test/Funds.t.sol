@@ -91,8 +91,6 @@ contract FundsTest is Base {
         vm.expectRevert();
         ex.setFactory(alice);
         vm.expectRevert();
-        ex.setOperator(alice, true);
-        vm.expectRevert();
         ex.setFeed(alice, true);
         vm.expectRevert();
         ex.setMinTarget(1);
@@ -101,7 +99,6 @@ contract FundsTest is Base {
         vm.prank(owner);
         ex.setMinTarget(3 ether);
         assertEq(ex.minTarget(), 3 ether);
-        assertTrue(ex.operators(operator));
         assertTrue(ex.feedEnabled(address(feed)));
         assertEq(ex.factory(), address(this));
     }

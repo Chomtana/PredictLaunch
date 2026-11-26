@@ -85,7 +85,6 @@ constructor(address owner);
 
 // admin (owner)
 function setFactory(address factory) external;                       // the only address allowed to registerLaunch
-function setOperator(address op, bool on) external;                 // informational: marks our sequencers, gates nothing
 function setFeed(address feed, bool enabled) external;
 constructor(address owner, address quoteToken);                      // quoteToken: 0 = native; else 18 decimals
 function quoteToken() external view returns (address);

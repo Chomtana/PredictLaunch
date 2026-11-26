@@ -29,7 +29,7 @@ struct Args {
     /// Flap Portal address.
     #[arg(long, env = "PREDICTLAUNCH_PORTAL", default_value_t = PORTAL)]
     portal: Address,
-    /// Operator private key (must be enabled with Exchange.setOperator; pays keeper gas too).
+    /// Operator private key (submits batches and pays keeper gas; submitBatch is permissionless).
     #[arg(long, env = "PREDICTLAUNCH_OPERATOR_KEY")]
     operator_key: String,
     #[arg(long, env = "PREDICTLAUNCH_PORT", default_value_t = 8787)]

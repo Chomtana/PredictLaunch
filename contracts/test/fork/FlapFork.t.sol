@@ -75,7 +75,6 @@ contract FlapForkTest is Test {
         vm.startPrank(owner);
         ex.setFactory(address(factory));
         ex.setFeed(BTCB_FEED, true);
-        ex.setOperator(operator, true);
         ex.setResolver(operator);
         ex.setChallengeWindow(120);
         vm.stopPrank();

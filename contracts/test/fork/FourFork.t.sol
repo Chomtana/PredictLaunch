@@ -79,7 +79,6 @@ contract FourForkTest is Test {
         ex = new Exchange(owner, quote);
         vm.startPrank(owner);
         ex.setFeed(BTCB_FEED, true);
-        ex.setOperator(operator, true);
         ex.setResolver(operator);
         ex.setMinTarget(quote == address(0) ? 2 ether : 1500 ether);
         vm.stopPrank();

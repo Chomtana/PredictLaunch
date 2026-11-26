@@ -17,7 +17,6 @@ contract MarketTest is Base {
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(address(feed), true);
-        ex.setOperator(operator, true);
         vm.stopPrank();
     }
 

@@ -45,7 +45,6 @@ contract QuoteTokenTest is Base {
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(address(feed), true);
-        ex.setOperator(operator, true);
         vm.stopPrank();
         _fundUsd(alice, 50 ether);
         _fundUsd(bob, 50 ether);

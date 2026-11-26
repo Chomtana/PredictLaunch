@@ -74,7 +74,6 @@ alloy_sol_types::sol! {
         /// Factories besides `factory` (the OpenFour rail) that may register launches.
         function setExtraFactory(address factory, bool on) external;
         function extraFactory(address factory) external view returns (bool);
-        function setOperator(address op, bool on) external;
         function setFeed(address feed, bool enabled) external;
         function setMinTarget(uint256 bnb) external;
 

@@ -27,7 +27,6 @@ abstract contract Base is Test {
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(address(feed), true);
-        ex.setOperator(operator, true);
         vm.stopPrank();
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);

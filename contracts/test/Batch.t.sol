@@ -237,9 +237,7 @@ contract BatchTest is Base {
         vm.prank(alice);
         ex.submitBatch(_emptyBatch(uint64(vm.getBlockTimestamp()), 0));
         assertEq(ex.batchCount(), 1);
-        vm.prank(owner);
-        ex.setOperator(operator, false);
-        vm.prank(operator);
+        vm.prank(bob);
         ex.submitBatch(_emptyBatch(uint64(vm.getBlockTimestamp()), 0));
         assertEq(ex.batchCount(), 2);
     }
