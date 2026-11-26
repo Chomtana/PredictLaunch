@@ -16,10 +16,12 @@
 // sequencer has it, around the market's live yes price from resolve, else 50.
 // With a USDT quote (deploy.json quoteToken) every amount is x1000 (S.K) and bots mint their USDT.
 // Funds 3 bots (anvil #5 maker, #6 and #7 takers), deposits, authorizes one trading key each, and
-// seeds the books. --live keeps going: the maker re-quotes both sides around
-// pUp = Φ((price − strike) / (σ·price·sqrt(timeLeft))) every few seconds and the takers cross it, so
-// open interest passes each target before settlement. When no launch is tradable any more, a new
-// round is created so the demo never goes quiet.
+// seeds the books. --live keeps going on EVERY tradable launch the sequencer lists (ours or a user's): the
+// maker always keeps a two-sided book around pUp = Φ((price − strike) / (σ·price·sqrt(timeLeft))) (question
+// launches: the Cournot opening), and the takers are paced so each launch fills linearly and reaches its
+// target at 80% of its life (creation -> settlement), never much earlier. One failing launch no longer
+// stops the tick for the others. When no launch is tradable any more, a new round is created so the demo
+// never goes quiet.
 
 import { parseEther, type Address } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
@@ -33,6 +35,30 @@ const S = setup(RPC, API, arg('deploy', '../.dev/deploy.json')!)
 
 // Accounts from MNEMONIC (.env; default anvil's public one): 3 creator, 5 maker, 6/7 takers (scripts/keys.sh).
 const CREATOR = roleAccount(3)
+const DEPLOYER = roleAccount(0)
+
+/** tBNB each seed account needs for gas (as in scripts/wallets.sh). Kept between 1x and 2x, refilled from the
+ *  deployer at start and every GAS_CHECK_MS. */
+const GAS_NEED: [number, string, bigint][] = [
+  [3, 'creator', parseEther('0.1')],
+  [5, 'maker', parseEther('0.02')],
+  [6, 'taker1', parseEther('0.02')],
+  [7, 'taker2', parseEther('0.02')],
+]
+const GAS_CHECK_MS = 15 * 60_000
+let lastGasCheck = 0
+
+/** Every GAS_CHECK_MS (or now with `force`): refill any seed account below its need to 2x its need. */
+async function checkGas(force = false) {
+  if (!force && Date.now() - lastGasCheck < GAS_CHECK_MS) return
+  lastGasCheck = Date.now()
+  try {
+    const sent = await S.refillGas(DEPLOYER, GAS_NEED.map(([i, label, need]) => ({ acct: roleAccount(i), need, label })))
+    for (const s of sent) console.log(`seed: gas refill ${s.label} ${s.address} +${Number(s.amount) / 1e18} BNB (back to 2x its need)`)
+  } catch (e) {
+    console.log(`seed: gas check failed: ${(e as Error).message.split('\n')[0]}`)
+  }
+}
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
 const shares = (x: number) => (BigInt(Math.round(x * S.K * 100)) * UNIT) // x (x K) shares, 0.01 granularity
 const K = BigInt(S.K)
@@ -49,6 +75,8 @@ interface Mkt {
   oracleCents?: number | null
   /** question launches: the market's live yes price (cents) from resolve, quoted until the opening is known */
   resolveCents?: number | null
+  /** question launches whose oracle price is outside the band: a random fair price inside it, picked once */
+  randomCents?: number
 }
 
 /** Symbols already launched this session; a meme is reused only once its list runs out. */
@@ -175,10 +203,21 @@ function band(m: Mkt): [number, number] {
   return [lo, 100 - lo]
 }
 
+/**
+ * The quoting centre: the fair price pulled inside the band far enough for the whole 3-level ladder (±5¢).
+ * A fair price past the band (a 4% or 97% Cournot market with a 20% cut) would otherwise drop every level and
+ * leave the launch with no liquidity at all.
+ */
+function center(m: Mkt, fair: number): number {
+  const [lo, hi] = band(m)
+  return Math.min(hi - 5, Math.max(lo + 5, fair))
+}
+
 /** Maker ladder: 3 levels on each side around the fair price (Up bids + Down bids = Up asks), inside the band. */
-async function quote(maker: Bot, m: Mkt, fair: number) {
+async function quote(maker: Bot, m: Mkt, fairPx: number) {
   await S.cancelAll(maker, m.id)
   const [lo, hi] = band(m)
+  const fair = center(m, fairPx)
   for (let i = 0; i < 3; i++) {
     const bid = fair - 1 - i * 2
     const ask = fair + 1 + i * 2
@@ -189,11 +228,12 @@ async function quote(maker: Bot, m: Mkt, fair: number) {
 }
 
 /** A taker crosses the maker's quote: buying Up or Down mints new pairs. */
-async function take(taker: Bot, m: Mkt, fair: number) {
+async function take(taker: Bot, m: Mkt, fairPx: number, size = shares(rnd(0.5, 2.5))) {
+  const fair = center(m, fairPx)
   const up = Math.random() < 0.5
   const hi = band(m)[1]
   const px = Math.min(hi, up ? fair + 3 : 100 - fair + 3)
-  const r = await S.place(taker, m.id, up ? 0 : 1, 0, px, shares(rnd(0.5, 2.5)), { ioc: true })
+  const r = await S.place(taker, m.id, up ? 0 : 1, 0, px, size, { ioc: true })
   return r.fills.reduce((s, f) => s + BigInt(f.amount), 0n)
 }
 
@@ -223,65 +263,164 @@ async function questionFair(m: Mkt): Promise<number> {
 }
 
 async function fair(m: Mkt): Promise<number> {
-  if (isQuestion(m)) return questionFair(m)
+  if (isQuestion(m)) {
+    // An oracle price the band cannot hold (4% or 97% with a 20% cut): quote a random fair price inside the
+    // band instead, kept for the launch's life so its book does not jump around.
+    const p = await questionFair(m)
+    const [lo, hi] = band(m)
+    if (p >= lo + 5 && p <= hi - 5) return p
+    if (m.randomCents == null) {
+      m.randomCents = Math.round(rnd(lo + 5, hi - 5))
+      console.log(`seed: #${m.id} oracle ${p}¢ is outside the ${lo}..${hi}¢ band -> quoting around a random ${m.randomCents}¢`)
+    }
+    return m.randomCents
+  }
   const [price, now] = await Promise.all([S.feedPrice(m.feed), S.chainNow()])
   return fairUpCents(price, m.strike, Number(m.settleTime - now))
 }
 
+/** What the live loop needs from /api/launches. */
+interface Summary {
+  id: number
+  rail: `0x${string}`
+  feed: `0x${string}`
+  strike: string
+  settleTime: number
+  createdAt: number
+  cutBps: number
+  target: string
+  pairs: string
+  projectedRaised: string
+  symbol: string
+  upPrice: number | null
+  tradable: boolean
+  kind: 'price' | 'question'
+  oracleProbability?: number | null
+}
+
+/** The target is reached at this fraction of a launch's life (creation -> settlement), not earlier. */
+const PACE = 0.8
+
+/**
+ * Pairs still missing to be on schedule: the target should fill linearly so it is reached at PACE of the
+ * launch's life. 0 when on or ahead of schedule (also once the target is reached).
+ */
+function behindPairs(l: Summary, now: number): bigint {
+  const life = l.settleTime - l.createdAt
+  if (life <= 0 || l.cutBps === 0) return 0n
+  const want = Math.min(1, Math.max(0, (now - l.createdAt) / (PACE * life)))
+  // projectedRaised = pairs x cut: the target needs target / cut pairs
+  const wantPairs = (BigInt(Math.round(want * 1e6)) * BigInt(l.target) * 10_000n) / (BigInt(l.cutBps) * 1_000_000n)
+  const gap = wantPairs - BigInt(l.pairs)
+  return gap > 0n ? gap : 0n
+}
+
+/** A Mkt for any launch the sequencer lists, ours or anyone's. Question launches quote around its oracle price. */
+function toMkt(l: Summary, known?: Mkt): Mkt {
+  const m: Mkt = known ?? {
+    id: BigInt(l.id),
+    rail: l.rail,
+    strike: BigInt(l.strike),
+    settleTime: BigInt(l.settleTime),
+    feed: l.feed,
+    target: BigInt(l.target),
+    cutBps: l.cutBps,
+    oracleCents: null,
+    resolveCents: null,
+  }
+  if (m.oracleCents == null && l.kind === 'question' && l.oracleProbability != null) m.oracleCents = oracleCents(l.oracleProbability)
+  return m
+}
+
 async function main() {
+  await checkGas(true)
   console.log('seed: creating launches')
-  let mkts = await createAll()
-  console.log(`seed: warmed the fork for graduation in ${await S.warmGraduation(mkts[0].rail, mkts[0].id, mkts[0].target)} ms`)
+  const created = await createAll()
+  console.log(`seed: warmed the fork for graduation in ${await S.warmGraduation(created[0].rail, created[0].id, created[0].target)} ms`)
   console.log('seed: funding bots #5 #6 #7 and authorizing trading keys')
   const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(roleAccount(i), 300n * E18 * K)))
   const takers = [t1, t2]
 
-  for (const m of mkts) await quote(maker, m, await fair(m))
-  for (let i = 0; i < 4; i++) for (const m of mkts) await take(takers[i % 2], m, await fair(m))
-  for (const m of mkts) await quote(maker, m, await fair(m))
+  for (const m of created) await quote(maker, m, await fair(m))
+  if (!LIVE) {
+    // One-shot seed: a little volume so the books are not empty; the live loop paces itself instead.
+    for (let i = 0; i < 4; i++) for (const m of created) await take(takers[i % 2], m, await fair(m))
+    for (const m of created) await quote(maker, m, await fair(m))
+    console.log('seed: done')
+    return
+  }
   console.log('seed: done')
-  if (!LIVE) return
 
-  console.log('seed: live loop (Ctrl-C to stop)')
+  // Every launch the sequencer lists, not only ours: user launches get the same maker and pace.
+  const mkts = new Map<number, Mkt>(created.map((m) => [Number(m.id), m]))
+  console.log(`seed: live loop on every tradable launch, paced to reach each target at ${PACE * 100}% of its life (Ctrl-C to stop)`)
   let tick = 0
   for (;;) {
     await sleep(rnd(2000, 4000))
+    let open: Summary[]
+    let now: number
     try {
-      const now = await S.chainNow()
-      const open = mkts.filter((m) => m.settleTime > now + 3n)
-      if (open.length === 0) {
-        const anyActive = (await S.get<{ tradable?: boolean }[]>('/api/launches')).some((l) => l.tradable)
-        if (!anyActive) {
-          console.log('seed: every launch settled; creating a new round')
-          mkts = await createAll()
-        }
-        continue
-      }
-      tick++
-      if (tick % 10 === 0) for (const b of [maker, ...takers]) if (await S.topUp(b, 100n * E18 * K, 200n * E18 * K)) console.log(`seed: topped up ${b.owner}`)
-      for (const m of open) {
-        const f = await fair(m)
-        if (tick % 3 === 0) await quote(maker, m, f)
-        if (Math.random() < 0.7) await take(takers[tick % 2], m, f)
-      }
-      if (tick % 10 === 0) {
-        const ls = await S.get<{ id: number; symbol: string; pairs: string; projectedRaised: string; target: string; upPrice: number | null }[]>('/api/launches')
-        for (const l of ls.filter((l) => open.some((m) => Number(m.id) === Number(l.id))))
-          console.log(`seed: #${l.id} ${l.symbol} pairs ${Number(BigInt(l.pairs)) / 1e18} projected ${Number(BigInt(l.projectedRaised)) / 1e18}/${Number(BigInt(l.target)) / 1e18} ${S.Q} up ${l.upPrice}`)
-      }
+      now = Number(await S.chainNow())
+      open = (await S.get<Summary[]>('/api/launches')).filter((l) => l.tradable && l.settleTime > now + 3)
     } catch (e) {
-      const msg = (e as Error).message.split('\n')[0]
-      console.log('seed: tick failed:', msg)
-      // A bot ran out of quote mid-tick: mint more right away instead of waiting for the periodic top-up.
-      if (/insufficient_balance|not enough free/i.test(msg)) {
-        for (const b of [maker, ...takers]) {
-          try {
-            if (await S.topUp(b, 100n * E18 * K, 200n * E18 * K)) console.log(`seed: topped up ${b.owner} after running low`)
-          } catch (err) {
-            console.log(`seed: top-up of ${b.owner} failed: ${(err as Error).message.split('\n')[0]}`)
-          }
-        }
+      console.log('seed: tick failed:', (e as Error).message.split('\n')[0])
+      continue
+    }
+    if (open.length === 0) {
+      await checkGas()
+      console.log('seed: no tradable launch left; creating a new round')
+      try {
+        for (const m of await createAll()) mkts.set(Number(m.id), m)
+      } catch (e) {
+        console.log('seed: new round failed:', (e as Error).message.split('\n')[0])
       }
+      continue
+    }
+    tick++
+    await checkGas()
+    if (tick % 10 === 0) await topUpAll([maker, ...takers])
+    // One market failing (settled mid-tick, a reverted order...) must not starve the others.
+    for (const l of shuffle(open)) {
+      const m = toMkt(l, mkts.get(l.id))
+      mkts.set(l.id, m)
+      try {
+        const f = await fair(m)
+        // The maker is never paced: every tradable launch has two-sided liquidity, whatever its settle time.
+        if (tick % 3 === 0 || ![...maker.resting.values()].includes(m.id)) await quote(maker, m, f)
+        const gap = behindPairs(l, now)
+        if (gap > 0n) {
+          // Close the gap in steps: at most ~5 (x K) pairs a tick so the chart moves smoothly.
+          const size = gap < shares(0.1) ? shares(0.1) : gap > shares(5) ? shares(rnd(2.5, 5)) : gap
+          await take(takers[(tick + l.id) % 2], m, f, size)
+          // Refill what the take ate: every launch keeps a full book for real users at all times.
+          await quote(maker, m, f)
+        }
+      } catch (e) {
+        const msg = (e as Error).message.split('\n')[0]
+        console.log(`seed: #${l.id} ${l.symbol} failed: ${msg}`)
+        // A bot ran out of quote mid-tick: mint more right away instead of waiting for the periodic top-up.
+        if (/insufficient_balance|not enough free/i.test(msg)) await topUpAll([maker, ...takers])
+      }
+    }
+    if (tick % 10 === 0) {
+      for (const l of open) {
+        const life = l.settleTime - l.createdAt
+        const t = life > 0 ? Math.round(((now - l.createdAt) / life) * 100) : 100
+        const pct = Math.round((Number(BigInt(l.projectedRaised)) / Number(BigInt(l.target))) * 100)
+        console.log(`seed: #${l.id} ${l.symbol} ${t}% of life, ${pct}% of target (${Number(BigInt(l.projectedRaised)) / 1e18}/${Number(BigInt(l.target)) / 1e18} ${S.Q}) up ${l.upPrice}`)
+      }
+    }
+    // Forget launches that are gone.
+    for (const id of mkts.keys()) if (!open.some((l) => l.id === id)) mkts.delete(id)
+  }
+}
+
+async function topUpAll(bots: Bot[]) {
+  for (const b of bots) {
+    try {
+      if (await S.topUp(b, 100n * E18 * K, 200n * E18 * K)) console.log(`seed: topped up ${b.owner}`)
+    } catch (err) {
+      console.log(`seed: top-up of ${b.owner} failed: ${(err as Error).message.split('\n')[0]}`)
     }
   }
 }

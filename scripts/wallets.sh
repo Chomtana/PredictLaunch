@@ -14,7 +14,8 @@
 #
 # Recommended tBNB is budgeted at 1 gwei (10x headroom: every tx is sent at 0.1 gwei) from measured gas: the Flap deploy
 # is ~10.3M gas, our OpenFour fork-deploy ~30M (31 txs) plus ~8.8M to register the preset, a Flap launch ~1.5M
-# gas plus the Portal's 0.005 BNB salt-lock fee. USDT (Flap's faucet token) needs no funding: its mint is
+# gas plus the Portal's 0.005 BNB salt-lock fee. The seed bots (creator, maker, takers) are filled to 2x their
+# need whenever they drop below it; seed.ts re-checks that every 15 min and refills them from the deployer. USDT (Flap's faucet token) needs no funding: its mint is
 # public and the bots mint their own.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +35,7 @@ while [ $# -gt 0 ]; do
     --keys) SHOW_KEYS=1; shift ;;
     --check) DISTRIBUTE=0; shift ;;
     --keep) KEEP="$2"; shift 2 ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "unknown option $1"; exit 1 ;;
   esac
 done
@@ -62,7 +63,9 @@ read_balances() {
   for i in "${!ROLE_NAMES[@]}"; do
     BAL[$i]="$(cast balance "${ROLE_ADDRS[$i]}" --rpc-url "$RPC" 2>/dev/null || echo 0)"
     local need_wei; need_wei="$(cast to-wei "${NEED[$i]}")"
-    SHORT[$i]="$(echo "if ($need_wei > ${BAL[$i]}) $need_wei - ${BAL[$i]} else 0" | bc)"
+    # Seed bots (creator maker taker1 taker2): below their need they get back to 2x it, as seed.ts keeps them.
+    local fill_wei="$need_wei"; [ "$i" -ge 2 ] && fill_wei="$(echo "2 * $need_wei" | bc)"
+    SHORT[$i]="$(echo "if ($need_wei > ${BAL[$i]}) $fill_wei - ${BAL[$i]} else 0" | bc)"
   done
 }
 
@@ -145,4 +148,4 @@ echo
 read_balances
 print_table
 echo
-echo "Done: every account holds its recommended tBNB."
+echo "Done: every account holds at least its recommended tBNB (seed bots: 2x)."

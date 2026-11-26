@@ -56,7 +56,8 @@ if using_anvil_mnemonic; then
   exit 1
 fi
 RPC="$BSC_TESTNET_RPC_URL"
-scrub() { perl -pe 'BEGIN { $u = $ENV{BSC_TESTNET_RPC_URL} } s/\Q$u\E/<live-rpc>/g'; }
+# Unbuffered ($|): the live seed log is read while it runs.
+scrub() { perl -pe 'BEGIN { $| = 1; $u = $ENV{BSC_TESTNET_RPC_URL} } s/\Q$u\E/<live-rpc>/g'; }
 [ "$(cast chain-id --rpc-url "$RPC")" = 97 ] || { echo "BSC_TESTNET_RPC_URL is not BSC testnet (chain 97)" >&2; exit 1; }
 FLAP_USDT=0x190C989D5665a0e404B444b53CAE9AbCfb600157
 mkdir -p "$OUT" "$DEP"

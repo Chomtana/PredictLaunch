@@ -273,6 +273,31 @@ export function setup(rpc: string, api: string, deployPath: string) {
     return true
   }
 
+  /**
+   * Keep each account's tBNB (gas) between `need` and 2 x `need`: below `need`, the deployer (`from`) sends what
+   * brings it back to 2 x `need`. Returns what was sent per address. A deployer that cannot cover it is logged
+   * and skipped (the bots keep running on what they have).
+   */
+  async function refillGas(from: LocalAccount, accounts: { acct: LocalAccount; need: bigint; label: string }[]) {
+    const sent: { label: string; address: Address; amount: bigint }[] = []
+    for (const { acct, need, label } of accounts) {
+      if (acct.address.toLowerCase() === from.address.toLowerCase()) continue
+      const bal = await pc.getBalance({ address: acct.address })
+      if (bal >= need) continue
+      const amount = 2n * need - bal
+      const have = await pc.getBalance({ address: from.address })
+      if (have < amount + parseEther('0.001')) {
+        console.log(`seed: ${label} ${acct.address} is low on gas (${Number(bal) / 1e18} BNB) but the deployer ${from.address} has only ${Number(have) / 1e18}: send it tBNB (scripts/wallets.sh)`)
+        continue
+      }
+      const hash = await wallet(from).sendTransaction({ account: from, chain, to: acct.address, value: amount })
+      const rc = await pc.waitForTransactionReceipt({ hash })
+      if (rc.status !== 'success') throw new Error(`gas refill of ${acct.address} reverted (${hash})`)
+      sent.push({ label, address: acct.address, amount })
+    }
+    return sent
+  }
+
   interface PlaceResult {
     orderHash?: Hex
     fills: { price: number; amount: string; kind: number | string }[]
@@ -321,7 +346,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, refillGas, place, cancelAll }
 }
 
 export interface Bot {

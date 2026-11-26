@@ -626,9 +626,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 }
 
 /** The quote token's symbol and USD price; works outside AppProvider (component tests): BNB, unpriced. */
-export function useQuote(): { symbol: string; usd: bigint | null } {
+export function useQuote(): { symbol: string; usd: bigint | null; token: Address } {
   const s = useContext(Ctx)
-  return { symbol: s?.quoteSymbol ?? 'BNB', usd: s?.quoteUsd ?? null }
+  return { symbol: s?.quoteSymbol ?? 'BNB', usd: s?.quoteUsd ?? null, token: s?.quoteToken ?? chainLib.NATIVE }
 }
 
 export function useApp(): AppState {

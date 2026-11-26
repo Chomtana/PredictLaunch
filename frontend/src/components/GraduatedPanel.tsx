@@ -3,6 +3,7 @@ import { fmtShares, num18, POOL_TOKENS, fmtAmt } from '../lib/units.ts'
 import { Spinner } from './ui.tsx'
 import { useQuote } from '../state.tsx'
 import { VENUE_NAME, type Venue } from '../lib/venue.ts'
+import { isNative } from '../lib/chain.ts'
 
 /** Pool opening price in the quote token per token: raised / 500M. */
 export const poolPrice = (raised: bigint) => num18(raised) / num18(POOL_TOKENS)
@@ -28,7 +29,7 @@ export function GraduatedPanel({
   /** Where the coin is minted (default Flap). */
   venue?: Venue
 }) {
-  const { symbol: q } = useQuote()
+  const { symbol: q, token: quoteToken } = useQuote()
   const [copied, setCopied] = useState(false)
   const amount = BigInt(claimable || '0')
   if (graduating) {
@@ -99,7 +100,7 @@ export function GraduatedPanel({
       {token && (
         <div className="muted small">
           Trade it:{' '}
-          <a className="link" href={`https://pancakeswap.finance/swap?chain=bscTestnet&outputCurrency=${token}`} target="_blank" rel="noreferrer">
+          <a className="link" href={`https://pancakeswap.finance/swap?chain=bscTestnet&inputCurrency=${isNative(quoteToken) ? 'BNB' : quoteToken}&outputCurrency=${token}`} target="_blank" rel="noreferrer">
             PancakeSwap V2 ↗
           </a>{' '}
           ·{' '}
