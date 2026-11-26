@@ -63,14 +63,14 @@ describe('CreateLaunchForm', () => {
   })
 
   it('USDT quote: target in USDT from minTarget, priced at $1', () => {
-    const usdt = { ...config, quoteToken: '0x190C989D5665a0e404B444b53CAE9AbCfb600157' as Address, quoteSymbol: 'USDT', minTarget: (1500n * E18).toString() }
+    const usdt = { ...config, quoteToken: '0x190C989D5665a0e404B444b53CAE9AbCfb600157' as Address, quoteSymbol: 'USDT', minTarget: (3000n * E18).toString() }
     render(<CreateLaunchForm config={usdt} priceOf={priceOf} quoteUsd={E18} connected onSubmit={vi.fn(async () => {})} />)
     fireEvent.click(screen.getByRole('button', { name: 'Price' }))
     expect(screen.getByLabelText('Target (USDT)')).toBeTruthy()
-    expect((screen.getByLabelText(/Target/) as HTMLInputElement).value).toBe('1500')
-    expect(screen.getByText(/\$1,500 · pool needed/)).toBeTruthy()
+    expect((screen.getByLabelText(/Target/) as HTMLInputElement).value).toBe('3000')
+    expect(screen.getByText(/\$3,000 · pool needed/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText(/Target/), { target: { value: '1000' } })
-    expect(screen.getByText(/at least 1,500 USDT/)).toBeTruthy()
+    expect(screen.getByText(/at least 3,000 USDT/)).toBeTruthy()
     expect(screen.getByText(/backed by 1 USDT/)).toBeTruthy()
   })
 

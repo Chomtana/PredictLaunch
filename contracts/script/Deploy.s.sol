@@ -17,8 +17,8 @@ import {ITestnetFactoryWhitelist, TESTNET_FACTORY_WHITELIST} from "src/flap/ITes
 ///   (real BSC testnet: also --legacy --with-gas-price 1gwei; the deployer needs testnet BNB)
 ///   env: OWNER (default: deployer), OPERATOR (default: deployer),
 ///        QUOTE_TOKEN (default: address(0) = native BNB; testnet: Flap's faucet USDT
-///        0x190C989D5665a0e404B444b53CAE9AbCfb600157), MIN_TARGET (wei, default: 2.15e18 native,
-///        1500e18 for an ERC20 quote), CHALLENGE_WINDOW (seconds a resolver proposal waits before a question
+///        0x190C989D5665a0e404B444b53CAE9AbCfb600157), MIN_TARGET (wei, default: 4.3e18 native,
+///        3000e18 for an ERC20 quote), CHALLENGE_WINDOW (seconds a resolver proposal waits before a question
 ///        launch resolves; default 120 so a dev demo settles in minutes; the contract's own default is 3600),
 ///        FACTORY_MULTIPLIER_BPS (default 10000 = 1x), ALL_FEEDS (default false, see below),
 ///        DEPLOY_JSON (output path, default ../.dev/deploy.json)
@@ -50,10 +50,11 @@ contract Deploy is Script {
 
         address quote = vm.envOr("QUOTE_TOKEN", address(0));
         Exchange ex = new Exchange(deployer, quote);
-        // The Portal refuses a pool quote under ~$1500 (2.15 BNB native; 1500e18 for an 18-decimal USD token), so a
-        // lower target could register and then never graduate.
-        uint256 minTarget = vm.envOr("MIN_TARGET", quote == address(0) ? uint256(0) : 1500 ether);
-        if (minTarget != 0) ex.setMinTarget(minTarget);
+        // The Portal refuses a pool quote under ~$1500 (the Exchange's 2.15 BNB constructor default), but Flap only
+        // shows a token as graduated from a ~$3000 raise (half the raise is the pool's share: $1500 at $3000). So the
+        // floor is $3000: 4.3 BNB native, 3000e18 for an 18-decimal USD token.
+        uint256 minTarget = vm.envOr("MIN_TARGET", quote == address(0) ? 4.3 ether : 3000 ether);
+        ex.setMinTarget(minTarget);
         PredictLaunchLauncherFactory factory = new PredictLaunchLauncherFactory(PORTAL, GUARDIAN, address(ex));
         ex.setFactory(address(factory));
         _enableFactory(address(factory));

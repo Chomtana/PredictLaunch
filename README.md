@@ -65,8 +65,9 @@ launch has settled, the bots create a new round. Logs are in `.dev/*.log`; Ctrl-
 (`0x190C989D5665a0e404B444b53CAE9AbCfb600157`, on-chain symbol "USD", 18 decimals). Its `mint` is
 public, so bots, the dev faucet and anyone on live testnet can mint it
 ([abc.flap.sh/faucet](https://abc.flap.sh/faucet?lang=en)); only gas and the 0.005 BNB salt-lock fee
-need tBNB. The Portal's pool floor is 1,500 USDT, so `minTarget` is 1,500 and every demo amount is
-x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUOTE_TOKEN` and
+need tBNB. The Portal creates a pool from 1,500 USDT, but Flap only shows a token as graduated from
+a ~3,000 USDT raise (half of it is the pool's share), so `minTarget` is 3,000 (4.3 BNB native), the seed
+bots' targets are 1-1.5x `minTarget`, and every other demo amount is x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUOTE_TOKEN` and
 `MIN_TARGET` env on `Deploy.s.sol`).
 
 ### Real BSC testnet (no fork)

@@ -2,14 +2,14 @@
 //
 //   node --experimental-strip-types scripts/e2e.ts --api ... --rpc ... --deploy ../.dev/deploy.json
 //
-// One BTCB launch settling 10 min out (strike = current price, cut 10%, target 2.15 BNB; with a USDT
-// quote every amount is x1000: target 2,150 USDT). Bot UP (anvil #1) buys only Up and bot DOWN
-// (anvil #2) buys only Down, minting 25 pairs (≥ 22 BNB; 25,000 USDT) before
+// One BTCB launch settling 10 min out (strike = current price, cut 10%, target = minTarget: 4.3 BNB,
+// or 3,000 USDT with a USDT quote). Bot UP (anvil #1) buys only Up and bot DOWN (anvil #2) buys only
+// Down, minting ~1.2x the pairs the target needs (55 BNB; 36,000 USDT) before
 // settlement. Then, with real time (no shortcuts), the keeper snapshots, resolves, redeems and
 // graduates. Asserts: token ends in 7777, a PancakeSwap pair exists, the loser claims > 0 tokens,
 // the winner's balance (Exchange for native, wallet for an ERC20 quote) rose by exactly (1 − cut) per winning share, softReversals == 0.
 
-import { erc20Abi, parseAbi, parseEther, zeroAddress, type Address } from 'viem'
+import { erc20Abi, parseAbi, zeroAddress, type Address } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { exchangeAbi } from '../src/lib/chain.ts'
 import { ANVIL_KEYS, E18, FEEDS, arg, setup, sleep, type Bot } from './lib.ts'
@@ -17,7 +17,6 @@ import { ANVIL_KEYS, E18, FEEDS, arg, setup, sleep, type Bot } from './lib.ts'
 const S = setup(arg('rpc', 'http://127.0.0.1:8545')!, arg('api', 'http://127.0.0.1:8787')!, arg('deploy', '../.dev/deploy.json')!)
 const SETTLE_IN = BigInt(arg('settle-in', '600')!)
 const K = BigInt(S.K)
-const PAIRS = 25n * E18 * K
 const CUT = 1000
 
 const ROUTER: Address = '0xc9D63ddCB9549578057EAB6A83a543DdFEE2b8c3'
@@ -52,13 +51,17 @@ async function main() {
   const creator = privateKeyToAccount(ANVIL_KEYS[4])
   const now = await S.chainNow()
   const strike = await S.feedPrice(FEEDS.BTC)
+  const target = await S.minTarget()
+  // ~1.2x the pairs the target needs at this cut, in whole multiples of 5 so the 5 rounds are equal
+  const step = 5n * E18
+  const PAIRS = (((target * 10000n * 12n) / (BigInt(CUT) * 10n) + step - 1n) / step) * step
   const settleTime = now + SETTLE_IN
   const { id, token, rail } = await S.createLaunch(creator, {
-    name: 'E2E Coin', symbol: 'E2E', imageURI: '', feed: FEEDS.BTC, strike, settleTime, cutBps: CUT, target: parseEther('2.15') * K, question: '', marketId: 0n,
+    name: 'E2E Coin', symbol: 'E2E', imageURI: '', feed: FEEDS.BTC, strike, settleTime, cutBps: CUT, target, question: '', marketId: 0n,
   })
   log(`launch #${id} token ${token}, strike ${Number(strike) / 1e18}, settles at ${settleTime} (in ${SETTLE_IN} s)`)
   check(token.toLowerCase().endsWith('7777'), `token ${token} ends in 7777`)
-  log(`warmed the fork for graduation in ${await S.warmGraduation(rail, id, parseEther('2.5') * K)} ms`)
+  log(`warmed the fork for graduation in ${await S.warmGraduation(rail, id, (PAIRS * BigInt(CUT)) / 10000n)} ms`)
 
   const up: Bot = await S.makeBot(privateKeyToAccount(ANVIL_KEYS[1]), 50n * E18 * K)
   const down: Bot = await S.makeBot(privateKeyToAccount(ANVIL_KEYS[2]), 50n * E18 * K)
@@ -77,7 +80,7 @@ async function main() {
   const [pu, pd] = await Promise.all([pos(id, up.owner), pos(id, down.owner)])
   check(pu[0] === PAIRS && pd[1] === PAIRS, `onchain positions: UP holds ${Number(pu[0]) / 1e18} Up, DOWN holds ${Number(pd[1]) / 1e18} Down`)
   const l0 = await S.get<{ pairs: string; projectedRaised: string }>(`/api/launch/${id}`)
-  log(`projected raised ${Number(BigInt(l0.projectedRaised)) / 1e18} ${S.Q} of ${2.15 * S.K}`)
+  log(`projected raised ${Number(BigInt(l0.projectedRaised)) / 1e18} ${S.Q} of ${Number(target) / 1e18}`)
   const before = { up: await bal(up.owner), down: await bal(down.owner) }
 
   log('waiting for settlement, resolution and graduation (real time)...')

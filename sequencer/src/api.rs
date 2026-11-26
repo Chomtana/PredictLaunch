@@ -39,7 +39,7 @@ use crate::views;
 pub const FAUCET_BNB: u128 = 1000;
 /// Markets returned by `POST /api/cournot/resolve`.
 pub const RESOLVE_LIMIT: u32 = 5;
-/// Quote tokens the dev faucet mints when the Exchange's quote is an ERC20 (launch targets start at 1500).
+/// Quote tokens the dev faucet mints when the Exchange's quote is an ERC20 (launch targets start at 3000).
 pub const FAUCET_QUOTE: u128 = 10_000;
 
 pub fn router<C: Chain>(app: Arc<App<C>>) -> Router {

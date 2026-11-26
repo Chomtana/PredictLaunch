@@ -8,7 +8,7 @@
 // on Four.meme (FourRail.createLaunch). Anvil #3 is the creator; everything is picked at random from
 // src/lib/catalog.ts:
 //   price:    a random BTC/BNB/ETH meme (name, symbol, coin icon), strike = live price -0.3%..+0.5% rounded
-//             to a nice number, settles in 10-30 min, random cut 10-30%, target 2.15-4 BNB (x1000 USDT)
+//             to a nice number, settles in 10-30 min, random cut 10-30%, target 1-1.5x minTarget
 //   question: a random real-world theme (weather, Fed, Starship, football...) searched on Cournot through
 //             /api/cournot/resolve; the best market's exact title becomes the question, with a meme name and
 //             a matching photo. Settles in 15-30 min. A theme with no market is skipped (logged).
@@ -89,6 +89,8 @@ function freshMeme(memes: Meme[]): Meme {
 }
 
 const CUTS = [1000, 1500, 2000, 2500, 3000]
+/** A launch target as a % of the Exchange's minTarget (Flap's graduated floor, ~$3000). */
+const targetX = async (pct: number) => ((await S.minTarget()) * BigInt(pct)) / 100n
 /** Strike vs the live price, in bps: mostly near the money so both sides trade. */
 const STRIKE_OFFSETS = [-30, -15, 0, 0, 10, 20, 35, 50]
 
@@ -104,7 +106,7 @@ async function createPrice(asset: Asset, four: Address | null = null): Promise<M
     settleTime: now + BigInt(minutes * 60),
     cutBps: pick(CUTS),
     // bigger raises only when there is time to fill them
-    target: parseEther(pick(minutes >= 20 ? ['2.15', '2.5', '3', '3.5', '4'] : ['2.15', '2.5', '3'])) * K,
+    target: await targetX(pick(minutes >= 20 ? [100, 115, 130, 150] : [100, 115, 130])),
   }
   const c = { ...d, imageURI: ICONS[asset], question: '', marketId: 0n }
   const { id, token, rail } = four ? await S.createFourLaunch(CREATOR, four, c) : await S.createLaunch(CREATOR, c)
@@ -152,7 +154,7 @@ async function createQuestion(four: Address | null = null): Promise<Mkt | null> 
       strike: 0n,
       settleTime: now + BigInt(minutes * 60),
       cutBps: pick(CUTS),
-      target: parseEther(pick(['2.15', '2.5', '3'])) * K,
+      target: await targetX(pick([100, 115, 130])),
     }
     try {
       const c = { ...d, imageURI: pick(theme.images), question: market.title, marketId: BigInt(market.id) }

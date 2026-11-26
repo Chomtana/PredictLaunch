@@ -131,7 +131,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     if (!Number.isFinite(settleSec)) e.settle = 'Pick a date and time'
     else if (dur < config.minDuration) e.settle = `At least ${duration(config.minDuration)} from now`
     else if (dur > config.maxDuration) e.settle = `At most ${duration(config.maxDuration)} from now`
-    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtAmt(minTarget, 2)} ${q} (${venue === 'flap' ? "Flap's pool floor" : 'the minimum target'})`
+    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtAmt(minTarget, 2)} ${q} (${venue === 'flap' ? "Flap's graduation floor" : 'the minimum target'})`
     return e
   }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q, isQ, questionText, pick, venue])
   const valid = Object.keys(errors).length === 0

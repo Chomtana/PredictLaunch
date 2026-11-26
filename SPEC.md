@@ -28,9 +28,10 @@ scripts/     dev.sh (fork demo), e2e.sh
   (`amount × price / 100`), payout (`amount × (10000 − cutBps) / 10000`) and void payout
   (`amount / 2`) exact, with no rounding anywhere. Anything else is rejected.
 - Cut (bps): one of `1000, 1500, 2000, 2500, 3000`, default 1000, fixed per launch.
-- `minTarget`: admin-configurable, default `2.15 ether`. The Portal refuses a pool quote under ~$1500
-  (2.15 BNB native; `1500e18` for the USD token: error `0xa32ef056(provided, min)`), so the deploy script
-  sets `1500 ether` for an ERC20 quote.
+- `minTarget`: admin-configurable, constructor default `2.15 ether`. The Portal refuses a pool quote under
+  ~$1500 (2.15 BNB native; `1500e18` for the USD token: error `0xa32ef056(provided, min)`), but Flap only
+  marks a token graduated from a ~$3000 raise (the pool's share is half the raise), so the deploy script
+  sets `4.3 ether` native and `3000 ether` for an ERC20 quote.
 - Memecoin: `totalSupply = 1_000_000_000e18`, `poolToken = 500_000_000e18`, losers'
   `LOSER_SUPPLY = 500_000_000e18`; tax 100 bps buy and sell (the Portal rejects < 100), `taxDuration
   30 days`, `antiFarmerDuration 1 days`, one DEFLATION slot of 10000 bps; quote `address(0)`;

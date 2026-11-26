@@ -85,7 +85,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
   const native = isNative(quote)
   /** Display unit of every Exchange amount. */
   const Q = native ? 'BNB' : 'USDT'
-  /** Size scale of the demo amounts: BNB amounts x1000 in USDT (the Portal's pool floor is ~$1500 = 2.15 BNB). */
+  /** Size scale of the demo amounts: BNB amounts x1000 in USDT. Launch targets come from `minTarget()`. */
   const K = native ? 1 : 1000
 
   async function get<T = any>(path: string): Promise<T> { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -149,6 +149,11 @@ export function setup(rpc: string, api: string, deployPath: string) {
       }
     }
     throw new Error('no LaunchCreated event in the newLauncher receipt')
+  }
+
+  /** The Exchange's minimum launch target (`/api/config` minTarget): Flap's graduated floor, ~$3000. */
+  async function minTarget(): Promise<bigint> {
+    return BigInt((await get<{ minTarget: string }>('/api/config')).minTarget)
   }
 
   /** The sequencer's OpenFour rail (`/api/config` fourRail), or null when it runs Flap only. */
@@ -358,7 +363,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, authorize, topUp, refillGas, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, minTarget, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, authorize, topUp, refillGas, place, cancelAll }
 }
 
 export interface Bot {
