@@ -591,3 +591,35 @@ fn funds_snapshot_overrides_balance_and_enforces_locks() {
     w.s.apply_poll(vec![], None, ms(T0 + 3));
     assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
 }
+
+/// Permissionless `submitBatch`: a third party lands the same match first (a copy of our batch with
+/// its own ts), so ours reverts. The fill counts once, from the third party's batch.
+#[test]
+fn foreign_batch_frontruns_ours() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    let ours = w.s.cut(ms(T0 + 3)).unwrap();
+    let mut theirs = ours.clone();
+    theirs.ts = ours.ts + 1;
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: theirs.ts,
+            fills: 1,
+            batch: Some(theirs),
+        }],
+        ms(T0 + 4),
+    );
+    // Ours reverts on chain (BadBatchTs / Overfill).
+    w.s.on_batch_failed(ms(T0 + 5));
+    assert_eq!(w.s.pending_fills(), 0);
+    assert_eq!(w.s.confirmed.pairs(0), E18);
+    assert_eq!(w.s.ledger.pairs(0), E18, "not double counted");
+    assert_eq!(w.s.confirmed.shares(0, alice.address(), Up), E18);
+    assert_eq!(w.s.confirmed.shares(0, bob.address(), Down), E18);
+    assert_eq!(w.s.trades.len(), 1);
+    assert!(w.s.books[&0].is_empty(), "both orders are filled, nothing rests");
+    check_invariants(&w);
+}

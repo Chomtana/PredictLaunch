@@ -163,6 +163,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     address public factory;
+    /// The project's own sequencers. Informational only: `submitBatch` is open to anyone.
     mapping(address => bool) public operators;
     mapping(address => bool) public feedEnabled;
     /// Atlas feed => Chainlink AggregatorV3 read by `snapshot` when the Atlas feed reverts or answers <= 0.
@@ -255,7 +256,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     // Errors
     // ---------------------------------------------------------------------------------------------------------
 
-    error NotOperator();
     error ZeroAmount();
     error BadIndex();
     error NotRequester();
@@ -304,11 +304,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     error NotResolver();
     error AlreadyProposed();
     error BadOutcome();
-
-    modifier onlyOperator() {
-        if (!operators[msg.sender]) revert NotOperator();
-        _;
-    }
 
     constructor(address owner_, address quoteToken_) Ownable(owner_) {
         if (quoteToken_ != address(0) && IERC20Decimals(quoteToken_).decimals() != 18) revert BadToken();
@@ -840,7 +835,11 @@ contract Exchange is Ownable, ReentrancyGuard {
     // Batches
     // ---------------------------------------------------------------------------------------------------------
 
-    function submitBatch(Batch calldata b) external onlyOperator nonReentrant {
+    /// @notice Permissionless: anyone may submit a batch. Every rule a batch could break is checked here
+    ///         (signatures, prices, amounts, funds, the timestamp window), so a submitter only picks which
+    ///         valid fills land. The sequencer matches the orders it is sent; another submitter racing it can
+    ///         make the sequencer's batch revert (Overfill, BadBatchTs), and the sequencer drops those fills.
+    function submitBatch(Batch calldata b) external nonReentrant {
         if (b.ts < lastBatchTs || b.ts > block.timestamp || block.timestamp - b.ts > MAX_LAG) revert BadBatchTs();
         lastBatchTs = b.ts;
         uint64 id = ++batchCount;

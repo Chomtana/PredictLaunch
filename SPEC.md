@@ -85,7 +85,7 @@ constructor(address owner);
 
 // admin (owner)
 function setFactory(address factory) external;                       // the only address allowed to registerLaunch
-function setOperator(address op, bool on) external;
+function setOperator(address op, bool on) external;                 // informational: marks our sequencers, gates nothing
 function setFeed(address feed, bool enabled) external;
 constructor(address owner, address quoteToken);                      // quoteToken: 0 = native; else 18 decimals
 function quoteToken() external view returns (address);
@@ -127,7 +127,7 @@ struct SignedOrder { Order order; bytes sig; }
 struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
 struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; } // kind 0 Transfer 1 Mint 2 Merge; indexes into orders
 struct Batch { uint64 ts; KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
-function submitBatch(Batch calldata b) external;                     // onlyOperator
+function submitBatch(Batch calldata b) external;                     // permissionless
 
 // views
 function launchCount() external view returns (uint256);
