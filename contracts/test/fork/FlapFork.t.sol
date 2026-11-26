@@ -9,8 +9,8 @@ import {Exchange} from "src/Exchange.sol";
 import {Eip712} from "src/lib/Eip712.sol";
 import {IPortal} from "src/flap/IPortal.sol";
 import {ILauncherDescription} from "src/flap/ILauncher.sol";
-import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
-import {BilauncherLauncher} from "src/flap/BilauncherLauncher.sol";
+import {PredictLaunchLauncherFactory} from "src/flap/PredictLaunchLauncherFactory.sol";
+import {PredictLaunchLauncher} from "src/flap/PredictLaunchLauncher.sol";
 
 interface IMintable {
     function mint(address to, uint256 amount) external;
@@ -29,7 +29,7 @@ interface IPairFactoryLike {
 }
 
 /// The full launch path on a BSC-testnet fork against the real Flap Portal:
-/// Portal.newLauncher -> our factory -> BilauncherLauncher (salt locked) -> Exchange.registerLaunch; trade; settle on
+/// Portal.newLauncher -> our factory -> PredictLaunchLauncher (salt locked) -> Exchange.registerLaunch; trade; settle on
 /// the real BTCB Atlas feed (slot 0x32 driven by vm.store); resolve -> Graduating; graduate -> launchTaxTokenV2.
 contract FlapForkTest is Test {
     address constant PORTAL = 0x000042108465206185A077Edc3F3fd2b49060000;
@@ -44,7 +44,7 @@ contract FlapForkTest is Test {
 
     IPortal portal = IPortal(PORTAL);
     Exchange ex;
-    BilauncherLauncherFactory factory;
+    PredictLaunchLauncherFactory factory;
     address owner = address(uint160(0xC0DE1001));
     address operator = address(uint160(0xC0DE1002));
     address creator = address(uint160(0xC0DE1003));
@@ -70,7 +70,7 @@ contract FlapForkTest is Test {
 
     function _deploy(address quote) internal {
         ex = new Exchange(owner, quote);
-        factory = new BilauncherLauncherFactory(PORTAL, GUARDIAN, address(ex));
+        factory = new PredictLaunchLauncherFactory(PORTAL, GUARDIAN, address(ex));
         vm.startPrank(owner);
         ex.setFactory(address(factory));
         ex.setFeed(BTCB_FEED, true);
@@ -112,7 +112,7 @@ contract FlapForkTest is Test {
     function _cfg(bytes32 salt) internal returns (Exchange.LaunchConfig memory c) {
         c.name = "Loser Coin";
         c.symbol = "LOSE";
-        c.imageURI = "ipfs://bilauncher-test";
+        c.imageURI = "ipfs://predictlaunch-test";
         c.feed = BTCB_FEED;
         c.strike = _price();
         c.settleTime = uint64(block.timestamp + 600);
@@ -156,7 +156,7 @@ contract FlapForkTest is Test {
     function test_graduateOnRealPortal() public {
         _pauseCreation();
         _openFactory();
-        _fullFlow(keccak256("bilauncher-fork"));
+        _fullFlow(keccak256("predictlaunch-fork"));
     }
 
     /// The live testnet Portal has creation open (featureFlags == 0): an unopened factory works end to end there.
@@ -164,7 +164,7 @@ contract FlapForkTest is Test {
         assertEq(portal.featureFlags() & 1, 0, "testnet creation is open");
         (bool enabled,) = portal.launcherFactoryMultiplier(address(factory));
         assertFalse(enabled);
-        _fullFlow(keccak256("bilauncher-fork-unopened"));
+        _fullFlow(keccak256("predictlaunch-fork-unopened"));
     }
 
     /// The same launch with Flap's testnet USDT as the quote: deposits, payouts and the pool are all USDT.
@@ -173,14 +173,14 @@ contract FlapForkTest is Test {
         vm.prank(owner);
         ex.setMinTarget(1500 ether);
         assertEq(ex.quoteToken(), USDT);
-        _fullFlow(keccak256("bilauncher-fork-usdt"));
+        _fullFlow(keccak256("predictlaunch-fork-usdt"));
     }
 
     /// A question launch through the real Portal (the factory decodes the extended LaunchConfig), settled YES by the
     /// resolver after the challenge window, then graduated like a price launch.
     function test_questionLaunchOnRealPortal() public {
         questionMode = true;
-        _fullFlow(keccak256("bilauncher-fork-question"));
+        _fullFlow(keccak256("predictlaunch-fork-question"));
         assertTrue(ex.isQuestion(0));
         Exchange.QuestionView memory q = ex.getQuestion(0);
         assertEq(q.question, "Will BTC close above $100k on 2026-12-31?");
@@ -233,7 +233,7 @@ contract FlapForkTest is Test {
         assertEq(l.rail, launcher);
         assertEq(l.creator, creator);
         assertEq(l.token, factory.predictedToken(salt));
-        assertEq(BilauncherLauncher(launcher).launchId(), 0);
+        assertEq(PredictLaunchLauncher(launcher).launchId(), 0);
         assertEq(factory.predictedLauncher(salt), launcher);
 
         string memory d = ILauncherDescription(launcher).description();
@@ -241,7 +241,7 @@ contract FlapForkTest is Test {
         _assertContains(d, string.concat('"quoteToken":"', _lower(_quote()), '"'));
         _assertContains(d, string.concat('"targetRaise":"', vm.toString(c.target), '"'));
         _assertContains(d, '"poolTokenRatio":"500000000000000000"');
-        _assertContains(d, '"titleEn":"bilauncher prediction launch"');
+        _assertContains(d, '"titleEn":"predictlaunch prediction launch"');
 
         // trade: 8 pairs at 50/50 (cut 30% -> projected raise 2.4 BNB >= 2.15)
         uint256 k = _k();
@@ -285,7 +285,7 @@ contract FlapForkTest is Test {
         assertEq(l.status, 2, "Graduated");
         address token = l.token;
         assertEq(uint16(uint160(token)), 0x7777, "token ends in 7777");
-        assertEq(BilauncherLauncher(launcher).token(), token);
+        assertEq(PredictLaunchLauncher(launcher).token(), token);
         assertEq(_quoteBal(address(ex)), exBal - 2.4 ether * k);
         assertEq(IERC20(token).balanceOf(address(ex)), 500_000_000e18, "Exchange holds the losers' 500M");
         address pair = IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, _quote() == address(0) ? WBNB : _quote());

@@ -4,8 +4,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use bilauncher_core::state::{Launch, Msg, State};
-use bilauncher_core::{Order, Outcome, Side};
+use predictlaunch_core::state::{Launch, Msg, State};
+use predictlaunch_core::{Order, Outcome, Side};
 use serde_json::{json, Value};
 
 /// launch → opening oracle probability/source (question launches).
@@ -116,7 +116,7 @@ pub fn launch_detail(
 
 pub fn book(st: &State, id: u64) -> Value {
     let (bids, asks) = st.books.get(&id).map(|b| b.levels()).unwrap_or_default();
-    let lv = |v: Vec<bilauncher_core::book::Level>| -> Vec<Value> {
+    let lv = |v: Vec<predictlaunch_core::book::Level>| -> Vec<Value> {
         v.into_iter()
             .map(|l| json!({"price": l.price, "amount": s(l.amount)}))
             .collect()

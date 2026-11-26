@@ -7,18 +7,18 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 import {LauncherFactoryBase} from "src/flap/LauncherFactoryBase.sol";
 import {LauncherDataSchema, FieldDescriptor} from "src/flap/IVaultSchemas.sol";
-import {BilauncherLauncher} from "src/flap/BilauncherLauncher.sol";
+import {PredictLaunchLauncher} from "src/flap/PredictLaunchLauncher.sol";
 import {Exchange} from "src/Exchange.sol";
 
-/// @title BilauncherLauncherFactory
-/// @notice Flap Launcher Factory for bilauncher. Call path:
+/// @title PredictLaunchLauncherFactory
+/// @notice Flap Launcher Factory for predictlaunch. Call path:
 ///           Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(Exchange.LaunchConfig))
 ///             -> factory.newLauncher(creator, data)                          (onlyHub)
-///             -> beacon proxy at (beacon, c.salt); BilauncherLauncher.initialize{value}(...)   (locks the salt)
+///             -> beacon proxy at (beacon, c.salt); PredictLaunchLauncher.initialize{value}(...)   (locks the salt)
 ///             -> Exchange.registerLaunch(launcher, creator, predictedToken(c.salt), c)  (validates the market)
 ///             -> launcher.setLaunchId(id)
 ///         Flap enables the factory with `setLauncherFactoryMultiplier(factory, multiplier, true)`.
-contract BilauncherLauncherFactory is LauncherFactoryBase {
+contract PredictLaunchLauncherFactory is LauncherFactoryBase {
     /// @notice Flap's tax token implementation (same on BNB Chain and BNB Testnet); a token is CREATE2(impl, salt, hub).
     address public constant TOKEN_IMPL = 0x7777c57ff7dc441c1715b2e36fa581c48B782222;
 
@@ -27,7 +27,7 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
     address public immutable exchange;
     address public immutable beacon;
 
-    event BilauncherLauncherCreated(
+    event PredictLaunchLauncherCreated(
         address indexed launcher, address indexed creator, uint256 indexed launchId, address token, bytes32 salt
     );
     event FlapLauncherImplementationUpgraded(address implementation);
@@ -39,7 +39,7 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
         hub = hub_;
         guardian = guardian_;
         exchange = exchange_;
-        BilauncherLauncher impl = new BilauncherLauncher();
+        PredictLaunchLauncher impl = new PredictLaunchLauncher();
         beacon = address(new UpgradeableBeacon(address(this), address(impl)));
     }
 
@@ -64,11 +64,11 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
     function _newLauncher(address creator, bytes calldata data) internal override returns (address launcher) {
         Exchange.LaunchConfig memory c = abi.decode(data, (Exchange.LaunchConfig));
         launcher = LibClone.deployDeterministicERC1967BeaconProxy(beacon, c.salt);
-        BilauncherLauncher(launcher).initialize{value: msg.value}(hub, creator, exchange, c);
+        PredictLaunchLauncher(launcher).initialize{value: msg.value}(hub, creator, exchange, c);
         address token = predictedToken(c.salt);
         uint256 id = Exchange(exchange).registerLaunch(launcher, creator, token, c);
-        BilauncherLauncher(launcher).setLaunchId(id);
-        emit BilauncherLauncherCreated(launcher, creator, id, token, c.salt);
+        PredictLaunchLauncher(launcher).setLaunchId(id);
+        emit PredictLaunchLauncherCreated(launcher, creator, id, token, c.salt);
     }
 
     function upgradeVaultImplementation(address newImplementation) external override onlyGuardian {
@@ -82,7 +82,7 @@ contract BilauncherLauncherFactory is LauncherFactoryBase {
 
     function launcherDataSchema() external pure override returns (LauncherDataSchema memory schema) {
         schema.description =
-            "bilauncher prediction launch: a binary market (Up/Down on an Atlas price feed, or YES/NO on a question) funds the pool. Winners are paid 1 minus the cut; at the target the raise and 50% of the supply seed the pool and losers claim the other 50%.";
+            "predictlaunch prediction launch: a binary market (Up/Down on an Atlas price feed, or YES/NO on a question) funds the pool. Winners are paid 1 minus the cut; at the target the raise and 50% of the supply seed the pool and losers claim the other 50%.";
         schema.isArray = false;
         FieldDescriptor[] memory f = new FieldDescriptor[](11);
         f[0] = FieldDescriptor({name: "name", fieldType: "string", description: "Token name (1-32 bytes)", decimals: 0});

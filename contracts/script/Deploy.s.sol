@@ -3,9 +3,9 @@ pragma solidity ^0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
 import {Exchange} from "src/Exchange.sol";
-import {BilauncherLauncherFactory} from "src/flap/BilauncherLauncherFactory.sol";
+import {PredictLaunchLauncherFactory} from "src/flap/PredictLaunchLauncherFactory.sol";
 
-/// Deploys Exchange + BilauncherLauncherFactory, enables every feed in script/feeds.json (with its Chainlink fallback,
+/// Deploys Exchange + PredictLaunchLauncherFactory, enables every feed in script/feeds.json (with its Chainlink fallback,
 /// if any), sets the operator (also the question-launch resolver) and the challenge window, then hands
 /// ownership to OWNER, and writes ../.dev/deploy.json {exchange, factory, chainId, owner, operator}.
 ///
@@ -44,7 +44,7 @@ contract Deploy is Script {
         // lower target could register and then never graduate.
         uint256 minTarget = vm.envOr("MIN_TARGET", quote == address(0) ? uint256(0) : 1500 ether);
         if (minTarget != 0) ex.setMinTarget(minTarget);
-        BilauncherLauncherFactory factory = new BilauncherLauncherFactory(PORTAL, GUARDIAN, address(ex));
+        PredictLaunchLauncherFactory factory = new PredictLaunchLauncherFactory(PORTAL, GUARDIAN, address(ex));
         ex.setFactory(address(factory));
         for (uint256 i; i < feeds.length; ++i) {
             ex.setFeed(feeds[i].addr, true);

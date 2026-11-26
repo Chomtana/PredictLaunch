@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 /// @title Eip712
-/// @notice The bilauncher EIP-712 types (SPEC.md "EIP-712"). The Rust sequencer and the frontend hash the same
+/// @notice The predictlaunch EIP-712 types (SPEC.md "EIP-712"). The Rust sequencer and the frontend hash the same
 ///         structs; `fixtures/eip712-vectors.json` (written by test/Vectors.t.sol) pins all three implementations.
 library Eip712 {
     /// outcome 0=Up 1=Down; side 0=Buy 1=Sell; price 1..99 (hundredths of 1 BNB per share, in the order's own
@@ -21,7 +21,7 @@ library Eip712 {
 
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 internal constant NAME_HASH = keccak256("bilauncher");
+    bytes32 internal constant NAME_HASH = keccak256("predictlaunch");
     bytes32 internal constant VERSION_HASH = keccak256("1");
 
     bytes32 internal constant ORDER_TYPEHASH = keccak256(

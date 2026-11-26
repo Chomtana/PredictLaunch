@@ -128,11 +128,11 @@ pub fn check_question(q: &str) -> Result<(), CournotError> {
     if q.trim().is_empty() {
         return Err(CournotError::BadQuestion("the question is empty".into()));
     }
-    if q.len() > bilauncher_core::MAX_QUESTION_BYTES {
+    if q.len() > predictlaunch_core::MAX_QUESTION_BYTES {
         return Err(CournotError::BadQuestion(format!(
             "the question is {} bytes (max {})",
             q.len(),
-            bilauncher_core::MAX_QUESTION_BYTES
+            predictlaunch_core::MAX_QUESTION_BYTES
         )));
     }
     Ok(())

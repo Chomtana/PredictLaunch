@@ -23,8 +23,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use bilauncher_core::state::AcceptError;
-use bilauncher_core::{
+use predictlaunch_core::state::AcceptError;
+use predictlaunch_core::{
     ErrorCode, CUTS, FEEDS, MAX_DURATION, MIN_DURATION, ONE_BNB, QUESTION_DEADLINE,
 };
 use serde::Deserialize;
@@ -104,7 +104,7 @@ pub fn config_json<C: Chain>(app: &App<C>) -> Value {
         "challengeWindow": app.state.lock().unwrap().challenge_window,
         "questionDeadline": QUESTION_DEADLINE,
         "domain": {
-            "name": "bilauncher",
+            "name": "predictlaunch",
             "version": "1",
             "chainId": s.domain.chain_id,
             "verifyingContract": s.domain.exchange,
@@ -225,12 +225,12 @@ async fn msgs<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> Res
             )
         }
     };
-    if arr.len() > bilauncher_core::MAX_GROUP {
+    if arr.len() > predictlaunch_core::MAX_GROUP {
         return err(
             StatusCode::BAD_REQUEST,
             ErrorCode::GroupTooLarge.as_str(),
-            format!("at most {} messages per group", bilauncher_core::MAX_GROUP),
-            Some(bilauncher_core::MAX_GROUP),
+            format!("at most {} messages per group", predictlaunch_core::MAX_GROUP),
+            Some(predictlaunch_core::MAX_GROUP),
         );
     }
     let mut parsed = Vec::with_capacity(arr.len());

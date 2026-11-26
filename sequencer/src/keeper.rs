@@ -11,8 +11,8 @@
 //! `crate::oracle` (it needs the Cournot evidence); `proposals_due` and `decide` are its pure rules.
 
 use alloy_primitives::{Address, B256};
-use bilauncher_core::state::{Launch, LaunchStatus, State};
-use bilauncher_core::{GRACE, MAX_LAG, QUESTION_DEADLINE, REDEEM_CHUNK};
+use predictlaunch_core::state::{Launch, LaunchStatus, State};
+use predictlaunch_core::{GRACE, MAX_LAG, QUESTION_DEADLINE, REDEEM_CHUNK};
 
 /// Resolver thresholds on the YES probability (SPEC: ≥ 0.97 → YES, ≤ 0.03 → NO).
 pub const YES_THRESHOLD: f64 = 0.97;

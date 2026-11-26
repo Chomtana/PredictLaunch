@@ -19,8 +19,8 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use anyhow::Context;
-use bilauncher_core::abi::{self, IAggregator, IExchange, IPortal, IQuoteToken};
-use bilauncher_core::state::ChainEvent;
+use predictlaunch_core::abi::{self, IAggregator, IExchange, IPortal, IQuoteToken};
+use predictlaunch_core::state::ChainEvent;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainInfo {
@@ -607,7 +607,7 @@ impl Chain for RpcChain {
         let challenge_window = self
             .view(self.exchange, IExchange::challengeWindowCall {})
             .await
-            .unwrap_or(bilauncher_core::DEFAULT_CHALLENGE_WINDOW);
+            .unwrap_or(predictlaunch_core::DEFAULT_CHALLENGE_WINDOW);
         let resolver = self
             .view(self.exchange, IExchange::resolverCall {})
             .await

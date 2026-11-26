@@ -1,8 +1,8 @@
 //! The shared EIP-712 vectors (`fixtures/eip712-vectors.json`, verified against viem and Solidity).
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use bilauncher_core::eip712::{authorize_key_hash, cancel_hash, domain_separator, KeyAuthMsg};
-use bilauncher_core::{order_hash, recover, Domain, Order, Outcome, Side};
+use predictlaunch_core::eip712::{authorize_key_hash, cancel_hash, domain_separator, KeyAuthMsg};
+use predictlaunch_core::{order_hash, recover, Domain, Order, Outcome, Side};
 use serde_json::Value;
 
 fn fixture() -> Value {
@@ -25,7 +25,7 @@ where
 fn matches_fixture() {
     let f = fixture();
     let d = &f["domain"];
-    assert_eq!(s(d, "name"), "bilauncher");
+    assert_eq!(s(d, "name"), "predictlaunch");
     assert_eq!(s(d, "version"), "1");
     let domain = Domain {
         chain_id: n(d, "chainId"),
@@ -83,7 +83,7 @@ fn local_signing_roundtrip() {
         chain_id: 97,
         exchange: Address::repeat_byte(7),
     };
-    let key = bilauncher_core::eip712::TestKey::from_seed("alice");
+    let key = predictlaunch_core::eip712::TestKey::from_seed("alice");
     let order = Order {
         owner: key.address(),
         launch_id: U256::from(1),

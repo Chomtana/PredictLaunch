@@ -1,4 +1,4 @@
-//! # bilauncher-core
+//! # predictlaunch-core
 //!
 //! Pure logic shared by the sequencer (and its tests): SPEC types, `sol!` ABI bindings, EIP-712
 //! hashing, the per-launch order book, the state mirror of `Exchange`, and the batcher.

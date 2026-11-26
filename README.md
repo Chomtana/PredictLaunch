@@ -1,4 +1,4 @@
-# bilauncher
+# PredictLaunch
 
 A memecoin launchpad where each launch's liquidity is raised by a Polymarket-style "Up or Down"
 prediction market on an Atlas Oracle feed. The creator picks a feed, a **strike** (price to beat) and
@@ -9,8 +9,8 @@ memecoin, and graduation launches the token through Flap's Pool Launch Portal vi
 Factory, with a PancakeSwap pool. If the target isn't reached, winners are paid in full.
 
 - Interfaces: [SPEC.md](SPEC.md) (and each track's `SPEC-NOTES.md`)
-- Design: [docs/superpowers/specs/2026-11-25-bilauncher-design.md](docs/superpowers/specs/2026-11-25-bilauncher-design.md)
-- Plan: [docs/superpowers/plans/2026-11-25-bilauncher.md](docs/superpowers/plans/2026-11-25-bilauncher.md)
+- Design: [docs/superpowers/specs/2026-11-25-predictlaunch-design.md](docs/superpowers/specs/2026-11-25-predictlaunch-design.md)
+- Plan: [docs/superpowers/plans/2026-11-25-predictlaunch.md](docs/superpowers/plans/2026-11-25-predictlaunch.md)
 
 ```
 contracts/   Foundry: Exchange, Flap Launcher Factory + Launcher (rail)
@@ -62,7 +62,7 @@ x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUO
 
 ### MetaMask
 
-Add a **custom network**: name "bilauncher fork", RPC `http://127.0.0.1:8545`, chain ID `97`,
+Add a **custom network**: name "PredictLaunch fork", RPC `http://127.0.0.1:8545`, chain ID `97`,
 symbol BNB. It has the same chain ID as the real BSC testnet: keep it a separate network, never mix
 the two, and never send real testnet funds to the dev keys. Import an anvil dev key (PUBLIC keys,
 fork only), for example #0 `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` or

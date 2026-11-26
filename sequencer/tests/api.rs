@@ -6,11 +6,11 @@ use std::time::Duration;
 use alloy_primitives::{Address, U256};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use bilauncher_core::eip712::{cancel_hash, TestKey};
-use bilauncher_core::{order_hash, Order, Outcome, Side, BNB_USD_FEED};
-use bilauncher_sequencer::api;
-use bilauncher_sequencer::app::{App, Settings};
-use bilauncher_sequencer::testutil::*;
+use predictlaunch_core::eip712::{cancel_hash, TestKey};
+use predictlaunch_core::{order_hash, Order, Outcome, Side, BNB_USD_FEED};
+use predictlaunch_sequencer::api;
+use predictlaunch_sequencer::app::{App, Settings};
+use predictlaunch_sequencer::testutil::*;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -41,14 +41,14 @@ impl T {
             domain: test_domain(),
             public_rpc: "http://127.0.0.1:8545".into(),
             factory: Address::repeat_byte(0xFA),
-            portal: bilauncher_core::PORTAL,
+            portal: predictlaunch_core::PORTAL,
             batch_ms: 2000,
             poll_ms: 1000,
             dev_faucet,
             start_block: 0,
             price_api: None,
             quote_symbol: quote_symbol.map(Into::into),
-            oracle: bilauncher_sequencer::testutil::offline_oracle(),
+            oracle: predictlaunch_sequencer::testutil::offline_oracle(),
         };
         let app = App::new(chain, settings).await.unwrap();
         let router = api::router(app.clone());

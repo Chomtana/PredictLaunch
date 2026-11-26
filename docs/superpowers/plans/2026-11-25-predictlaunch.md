@@ -1,4 +1,4 @@
-# bilauncher Implementation Plan
+# predictlaunch Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@ and graduation launches the token through the real Flap Portal.
 launches. It re-verifies every signed order in batches submitted by whitelisted operators and reads
 Atlas feeds for round prices. Launches are created through Flap's Pool Launch Portal and **our
 Launcher Factory** (required by the Flap track). At graduation, `Exchange` hands the raised BNB to
-the launch's **rail** (our `BilauncherLauncher`), which calls `launchTaxTokenV2`. The rail
+the launch's **rail** (our `PredictLaunchLauncher`), which calls `launchTaxTokenV2`. The rail
 interface lets an OpenFour rail be added later. A Rust
 sequencer matches orders instantly (soft confirmation), cuts batches, and runs the keeper (snapshot,
 resolve, redeem, graduate). A React/Vite frontend talks to the sequencer API and the fork RPC. A
@@ -20,7 +20,7 @@ feed relay keeps fork prices live.
 tokio), React 19 + Vite 8 + viem 2 + lightweight-charts 5, Node ≥ 23 scripts
 (`--experimental-strip-types`), anvil fork of BSC testnet.
 
-**Spec:** `docs/superpowers/specs/2026-11-25-bilauncher-design.md` (read it first). Reference
+**Spec:** `docs/superpowers/specs/2026-11-25-predictlaunch-design.md` (read it first). Reference
 code to adapt: `../biliquid` (`contracts/`, `sequencer/`, `frontend/`, `scripts/dev.sh`, `SPEC.md`).
 
 
@@ -121,7 +121,7 @@ Tracks C, S and F run as three parallel agents after Task 0. Each works only in 
   FDUSD and VAI are excluded.
 - Atlas feed state: storage slot `0x32` = `updatedAt(uint48) | startedAt(uint48) | answer(uint80)`,
   high bits to low.
-- EIP-712 domain: `name "bilauncher"`, `version "1"`, `chainId 97`, `verifyingContract = Exchange`.
+- EIP-712 domain: `name "predictlaunch"`, `version "1"`, `chainId 97`, `verifyingContract = Exchange`.
 - UI shows amounts in BNB, with a USD estimate from the BNB/USD feed. Use Polymarket's layout only,
   never its name or branding.
 - Commit after every task step marked "Commit". Never commit `.env`.
@@ -190,7 +190,7 @@ function bumpMinNonce(uint64 minNonce) external;                     // orders w
 struct LaunchConfig { string name; string symbol; string imageURI; address feed; uint32 interval;
                       uint16 cutBps; uint256 target; uint64 deadline; bytes32 salt; }
 // Users create a launch with Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig)).
-// The factory deploys a BilauncherLauncher (beacon proxy), whose initialize locks the salt, then calls:
+// The factory deploys a PredictLaunchLauncher (beacon proxy), whose initialize locks the salt, then calls:
 function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
     external returns (uint256 launchId);                             // onlyFactory; validates c (see rules)
 function snapshot(uint256 launchId, uint32 boundary) external;       // boundary k at startTime + k*interval
@@ -229,19 +229,19 @@ resolved count), name, symbol, imageURI }`.
 ```solidity
 interface ILaunchRail { function launch(uint256 launchId) external payable returns (address token, address pool); }
 
-// contracts/src/flap/BilauncherLauncherFactory.sol  (is LauncherFactoryBase)
+// contracts/src/flap/PredictLaunchLauncherFactory.sol  (is LauncherFactoryBase)
 constructor(address hub, address guardian, address exchange);
 // _newLauncher(creator, data): c = abi.decode(data, (LaunchConfig)); deploy BeaconProxy;
-//   BilauncherLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
-//   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); BilauncherLauncher(l).setLaunchId(id)
+//   PredictLaunchLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
+//   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); PredictLaunchLauncher(l).setLaunchId(id)
 // launcherDataSchema(): fields name, symbol, imageURI, feed, interval, cutBps, target, deadline, salt
 
-// contracts/src/flap/BilauncherLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
+// contracts/src/flap/PredictLaunchLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
 function initialize(address hub, address creator, address exchange, LaunchConfig calldata c) external payable; // once
 function launch(uint256 launchId) external payable returns (address token, address pool); // only exchange; launchTaxTokenV2{value: msg.value}
 function initializeDistribution(address token, uint256 amount, bytes calldata, bytes32) external; // onlyHub, during launch only
 // after the Portal call returns, launch() approves and calls exchange.receiveLoserTokens(launchId, token, 500M)
-// _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "bilauncher prediction launch"
+// _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "predictlaunch prediction launch"
 ```
 `RoundView { startTime, endTime, startPrice, endPrice, startSet, endSet, resolved, outcome (0 Up,
 1 Down, 2 Void), pairs }`.
@@ -319,7 +319,7 @@ insufficient_shares, unknown_order, expired, key_expired, group_too_large`.
 `fixtures/eip712-vectors.json` (written by Task 0, consumed by the C, S and F tests):
 `{domain:{name,version,chainId,verifyingContract}, orders:[{order, hash, signer, sig}],
 keys:[{auth, hash, sig}], cancels:[{cancel, hash, sig}]}`. Signers: anvil keys #0 (Alice) and #1
-(Bob), plus a trading key generated from `keccak256("bilauncher-key")`.
+(Bob), plus a trading key generated from `keccak256("predictlaunch-key")`.
 
 ---
 
@@ -339,14 +339,14 @@ keys:[{auth, hash, sig}], cancels:[{cancel, hash, sig}]}`. Signers: anvil keys #
   plus the `ORDER_TYPEHASH`, `AUTHORIZE_KEY_TYPEHASH` and `CANCEL_TYPEHASH` constants; the vectors file.
 
 - [ ] **Step 1:** Write `SPEC.md`: copy the "Shared interface" section of this plan plus the Global
-  Constraints, under the title "bilauncher — shared interface spec (single source of truth)".
+  Constraints, under the title "predictlaunch — shared interface spec (single source of truth)".
 - [ ] **Step 2:** Create `contracts/foundry.toml` copying biliquid's (solc 0.8.39, prague, optimizer
   200, Soldeer deps `forge-std 1.17.0`, `@openzeppelin-contracts 5.7.0`, no SP1), with
   `via_ir = true` and `fs_permissions = [{access="read-write", path="../fixtures"}]`. Run
   `forge soldeer install`.
 - [ ] **Step 3:** Write the failing test `contracts/test/Vectors.t.sol::test_writeVectors`. It
   builds 3 orders (Up/Buy/50, Down/Sell/37, amount 2.5e18), 1 AuthorizeKey and 1 Cancel on the
-  domain `(bilauncher, 1, 97, 0x00000000000000000000000000000000000E8C4A)`, signs them with
+  domain `(predictlaunch, 1, 97, 0x00000000000000000000000000000000000E8C4A)`, signs them with
   `vm.sign`, writes `../fixtures/eip712-vectors.json`, and asserts `ecrecover(hash, sig) ==
   signer` for each.
 - [ ] **Step 4:** Implement `contracts/src/lib/Eip712.sol` (typehash strings exactly as in the spec,
@@ -492,8 +492,8 @@ events.
 
 ### Task C6: Flap Launcher Factory + Launcher, fork tests, deploy script
 
-**Files:** Create `contracts/src/flap/BilauncherLauncherFactory.sol`,
-`contracts/src/flap/BilauncherLauncher.sol`, `contracts/test/fork/FlapFork.t.sol`,
+**Files:** Create `contracts/src/flap/PredictLaunchLauncherFactory.sol`,
+`contracts/src/flap/PredictLaunchLauncher.sol`, `contracts/test/fork/FlapFork.t.sol`,
 `contracts/test/fork/FeedFork.t.sol`, `contracts/script/Deploy.s.sol`, `contracts/script/feeds.json`
 (the spec's feed table: symbol, address, mask).
 
@@ -534,7 +534,7 @@ chainId, owner, operator}`.
 Adapt biliquid's `sequencer/` (axum app, WS fan-out, chain polling) and the *ideas* of its
 `core.rs`. The engine is gone: the contract is the validator, and the sequencer mirrors its rules.
 
-### Task S1: `bilauncher-core` types, ABI, EIP-712
+### Task S1: `predictlaunch-core` types, ABI, EIP-712
 
 **Files:** Create `core/Cargo.toml`, `core/src/{lib.rs, types.rs, abi.rs, eip712.rs}`, Test
 `core/tests/vectors.rs`.
@@ -547,9 +547,9 @@ order_hash(&Domain, &Order) -> B256`, `fn recover(&B256, &[u8]) -> Result<Addres
 
 - [ ] **Step 1:** Failing test `vectors.rs::matches_fixture`: parse `../fixtures/eip712-vectors.json`;
   for every order/key/cancel, the hash equals and `recover` returns the signer.
-- [ ] **Step 2:** Run `cargo test -p bilauncher-core`. Expected: FAIL.
+- [ ] **Step 2:** Run `cargo test -p predictlaunch-core`. Expected: FAIL.
 - [ ] **Step 3:** Implement (alloy `sol!` `Eip712` derive for the typed structs).
-- [ ] **Step 4:** Run `cargo test -p bilauncher-core`. Expected: PASS.
+- [ ] **Step 4:** Run `cargo test -p predictlaunch-core`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(core): types, ABI bindings, EIP-712`.
 
 ### Task S2: Book and matcher (Up terms)
@@ -567,7 +567,7 @@ Price-time priority, maker price.
 - [ ] **Step 1:** Failing tests: `buy_up_crosses_buy_down_as_mint`; `sell_up_crosses_sell_down_as_merge`;
   `transfer_same_outcome`; `price_time_priority`; `partial_fill_rests_remainder`; `levels_in_up_terms`
   (a Buy Down @30 shows as ask 70); `rejects_dust_and_bad_price` (amount % 1e16 != 0, price 0/100).
-- [ ] **Step 2:** Run `cargo test -p bilauncher-core --test book`. Expected: FAIL.
+- [ ] **Step 2:** Run `cargo test -p predictlaunch-core --test book`. Expected: FAIL.
 - [ ] **Step 3:** Implement (`BTreeMap<u8, VecDeque<RestingOrder>>` per side).
 - [ ] **Step 4:** Run it again. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(core): Polymarket-style book with transfer/mint/merge`.
@@ -592,7 +592,7 @@ ifResting]` (as in biliquid: the cancel is kept only if a remainder rests).
   `market_order_never_rests`; `withdraw_cancels_newest_first`;
   `cuts_batch_at_round_start_boundary` (two launches, B's round starts after the open batch's ts →
   two batches); `no_fill_at_or_after_round_end`; `orders_dropped_at_round_end`.
-- [ ] **Step 2:** Run `cargo test -p bilauncher-core --test state`. Expected: FAIL.
+- [ ] **Step 2:** Run `cargo test -p predictlaunch-core --test state`. Expected: FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run it again. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(core): state mirror, atomic acceptance, boundary-safe batching`.
@@ -614,7 +614,7 @@ u64) -> Vec<KeeperAction>` (pure: snapshot boundaries in `[t, t+GRACE]`, resolve
 - [ ] **Step 1:** Failing tests: `keeper_snapshots_on_boundary`; `keeper_resolves_in_order_and_catches_up`;
   `keeper_redeems_all_holders`; `keeper_graduates`; `failed_batch_restores_state` (simulate fails →
   the batch's fills are reverted in the mirror, `soft_reversals += 1`).
-- [ ] **Step 2:** Run `cargo test -p bilauncher-sequencer --test keeper`. Expected: FAIL.
+- [ ] **Step 2:** Run `cargo test -p predictlaunch-sequencer --test keeper`. Expected: FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run it again. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(sequencer): chain I/O and keeper`.
@@ -624,13 +624,13 @@ u64) -> Vec<KeeperAction>` (pure: snapshot boundaries in `[t, t+GRACE]`, resolve
 **Files:** Create `sequencer/src/{api.rs, app.rs, prices.rs, main.rs}`; Test `sequencer/tests/api.rs`.
 
 **Interfaces:** Implements every endpoint in the SPEC API section exactly. CLI (env prefix
-`BILAUNCHER_`): `--rpc`, `--public-rpc`, `--exchange`, `--operator-key`, `--port 8787`, `--batch-ms
+`PREDICTLAUNCH_`): `--rpc`, `--public-rpc`, `--exchange`, `--operator-key`, `--port 8787`, `--batch-ms
 2000`, `--poll-ms 1000`, `--dev-faucet`. The price stream polls `latestRoundData` for every feed
 used by a launch, plus BNB/USD, every 2 s; it keeps 24 h of ticks in memory and pushes them over WS.
 
 - [ ] **Step 1:** Failing tests (tower `oneshot` against the fake chain): `status_shape`; `config_shape`; `place_and_book`;
   `group_error_reports_index`; `user_view_after_fill`; `ws_pushes_on_change`; `faucet_disabled_by_default`.
-- [ ] **Step 2:** Run `cargo test -p bilauncher-sequencer --test api`. Expected: FAIL.
+- [ ] **Step 2:** Run `cargo test -p predictlaunch-sequencer --test api`. Expected: FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run `cargo test --workspace`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(sequencer): HTTP/WS API, price stream, dev faucet`.
@@ -640,11 +640,11 @@ used by a launch, plus BNB/USD, every 2 s; it keeps 24 h of ticks in memory and 
 ## Track F — frontend (`frontend/`)
 
 Start from a copy of biliquid's `frontend/` config: `package.json` deps (rename the package to
-`bilauncher-frontend`), `vite.config.ts` (proxy `/api` and `/ws` to `BILAUNCHER_API`),
+`predictlaunch-frontend`), `vite.config.ts` (proxy `/api` and `/ws` to `PREDICTLAUNCH_API`),
 `tsconfig.json`, oxlint, vitest, and fonts. Reuse `lib/wallet.ts` (including the dev wallet),
-`lib/tradingKey.ts` (storage key prefix `bilauncher:`) and `lib/format.ts`. Dark theme in the spirit
+`lib/tradingKey.ts` (storage key prefix `predictlaunch:`) and `lib/format.ts`. Dark theme in the spirit
 of the reference screenshot (`docs/superpowers/specs/assets/polymarket-btc-5m.png`), with our own
-name "bilauncher".
+name "predictlaunch".
 
 ### Task F1: Libraries — config, API client, EIP-712, units, salt mining
 
@@ -767,7 +767,7 @@ Test `frontend/scripts/feed-relay.test.ts`.
   1795599579, 1795599580}`.
 - [ ] **Step 2:** Run `pnpm vitest run scripts`. Expected: FAIL.
 - [ ] **Step 3:** Implement the three files.
-- [ ] **Step 4:** Run `scripts/dev.sh --no-frontend`. Expected: "bilauncher local demo is up",
+- [ ] **Step 4:** Run `scripts/dev.sh --no-frontend`. Expected: "predictlaunch local demo is up",
   `/api/launches` lists 2 launches, and within 1 round `/api/launch/0` shows a resolved round.
 - [ ] **Step 5: Commit** `feat: feed relay, seed bots, one-command fork demo`.
 

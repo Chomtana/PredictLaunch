@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bilauncher end-to-end smoke on a fresh anvil fork of BSC testnet (real time, ~13 min):
+# PredictLaunch end-to-end smoke on a fresh anvil fork of BSC testnet (real time, ~13 min):
 # dev.sh --no-frontend --no-seed, then frontend/scripts/e2e.ts creates a BTCB launch settling 10 min
 # out, two bots mint 25,000 USDT of pairs (25 BNB with QUOTE=bnb), and the run waits for graduation through
 # the real Flap Portal.

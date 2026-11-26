@@ -1,6 +1,6 @@
 [package]
-name = "bilauncher-core"
-description = "bilauncher core: types, ABI bindings, EIP-712, order book, state mirror, batcher (pure)"
+name = "predictlaunch-core"
+description = "predictlaunch core: types, ABI bindings, EIP-712, order book, state mirror, batcher (pure)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

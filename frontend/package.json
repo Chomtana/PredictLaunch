@@ -1,9 +1,9 @@
 {
-  "name": "bilauncher-frontend",
+  "name": "predictlaunch-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "bilauncher UI: memecoin launches funded by Up/Down prediction rounds",
+  "description": "predictlaunch UI: memecoin launches funded by Up/Down prediction rounds",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",

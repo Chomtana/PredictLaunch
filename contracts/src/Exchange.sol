@@ -19,7 +19,7 @@ interface IERC20Decimals {
     function decimals() external view returns (uint8);
 }
 
-/// @title bilauncher Exchange
+/// @title predictlaunch Exchange
 /// @notice Quote-token custody (native BNB or one ERC20, fixed at deploy), binary Up/Down markets (one per launch), batched settlement of signed orders, and
 ///         graduation of each launch's memecoin through its rail (a Flap Launcher). See SPEC.md.
 contract Exchange is Ownable, ReentrancyGuard {
@@ -54,7 +54,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint8 internal constant BUY = 0;
     uint8 internal constant SELL = 1;
 
-    /// @notice EIP-712 domain: ("bilauncher", "1", chainid, this).
+    /// @notice EIP-712 domain: ("predictlaunch", "1", chainid, this).
     bytes32 public immutable DOMAIN_SEPARATOR;
     /// @notice The collateral every balance, share pair and raise is denominated in: address(0) = native BNB,
     ///         otherwise an 18-decimal ERC20 (1 pair is backed by exactly 1e18 of it).

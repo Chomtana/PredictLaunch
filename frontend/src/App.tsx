@@ -37,7 +37,7 @@ export function App() {
       <Header route={route.name} />
       {configError && !config && (
         <div className="banner warn top">
-          Can't reach the bilauncher sequencer ({configError}). Showing what we can; retrying every 2 s.
+          Can't reach the PredictLaunch sequencer ({configError}). Showing what we can; retrying every 2 s.
         </div>
       )}
       <main>
@@ -46,7 +46,7 @@ export function App() {
         {route.name === 'launch' && <LaunchPage id={route.id} />}
       </main>
       <footer className="footer">
-        <span>bilauncher · BSC testnet{config && /127\.0\.0\.1|localhost/.test(config.rpc) ? ' (local fork)' : ''}</span>
+        <span>PredictLaunch · BSC testnet{config && /127\.0\.0\.1|localhost/.test(config.rpc) ? ' (local fork)' : ''}</span>
         <span className="muted">
           Launches via Flap Portal · prices by Atlas oracle{config ? ` · Exchange ${config.exchange.slice(0, 8)}…` : ''}
         </span>

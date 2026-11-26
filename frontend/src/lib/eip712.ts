@@ -9,7 +9,7 @@ export interface Domain {
 }
 
 export const domainOf = (d: Domain) =>
-  ({ name: 'bilauncher', version: '1', chainId: d.chainId, verifyingContract: d.exchange }) as const
+  ({ name: 'predictlaunch', version: '1', chainId: d.chainId, verifyingContract: d.exchange }) as const
 
 export const ORDER_TYPES = {
   Order: [

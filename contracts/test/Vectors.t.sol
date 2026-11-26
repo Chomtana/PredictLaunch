@@ -45,7 +45,7 @@ contract VectorsTest is Test {
         domain = Eip712.domainSeparator(CHAIN_ID, VERIFYING);
         address alice = vm.addr(ALICE_PK);
         address bob = vm.addr(BOB_PK);
-        uint256 keyPk = uint256(keccak256("bilauncher-key"));
+        uint256 keyPk = uint256(keccak256("predictlaunch-key"));
         address key = vm.addr(keyPk);
 
         Eip712.Order[3] memory os = [
@@ -83,7 +83,7 @@ contract VectorsTest is Test {
         string[] memory cancels = new string[](1);
         cancels[0] = vm.serializeBytes("c0", "sig", _sig(ALICE_PK, ch));
 
-        vm.serializeString("domain", "name", "bilauncher");
+        vm.serializeString("domain", "name", "predictlaunch");
         vm.serializeString("domain", "version", "1");
         vm.serializeString("domain", "chainId", vm.toString(CHAIN_ID));
         vm.serializeBytes32("domain", "separator", domain);

@@ -1,4 +1,4 @@
-//! EIP-712 (SPEC "EIP-712"): domain `bilauncher` / `1` / chainId / Exchange.
+//! EIP-712 (SPEC "EIP-712"): domain `predictlaunch` / `1` / chainId / Exchange.
 
 use alloy_primitives::{keccak256, Address, Signature, B256};
 use alloy_sol_types::{Eip712Domain, SolStruct};
@@ -15,7 +15,7 @@ pub struct Domain {
 impl Domain {
     pub fn eip712(&self) -> Eip712Domain {
         Eip712Domain::new(
-            Some("bilauncher".into()),
+            Some("predictlaunch".into()),
             Some("1".into()),
             Some(alloy_primitives::U256::from(self.chain_id)),
             Some(self.exchange),

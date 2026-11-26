@@ -1,12 +1,12 @@
 //! Keeper schedule (pure, `keeper_actions`) and batch failure handling against `FakeChain`.
 
 use alloy_primitives::{Address, U256};
-use bilauncher_core::eip712::TestKey;
-use bilauncher_core::state::{ChainEvent, Config, LaunchStatus, Msg, State};
-use bilauncher_core::{Outcome, Side, GRACE, MAX_LAG};
-use bilauncher_sequencer::app::{App, Settings};
-use bilauncher_sequencer::keeper::{keeper_actions, KeeperAction};
-use bilauncher_sequencer::testutil::*;
+use predictlaunch_core::eip712::TestKey;
+use predictlaunch_core::state::{ChainEvent, Config, LaunchStatus, Msg, State};
+use predictlaunch_core::{Outcome, Side, GRACE, MAX_LAG};
+use predictlaunch_sequencer::app::{App, Settings};
+use predictlaunch_sequencer::keeper::{keeper_actions, KeeperAction};
+use predictlaunch_sequencer::testutil::*;
 
 const T: u64 = 1_900_000_000;
 const FEED: Address = Address::repeat_byte(0xFE);
@@ -194,14 +194,14 @@ fn settings() -> Settings {
         domain: test_domain(),
         public_rpc: "http://127.0.0.1:8545".into(),
         factory: Address::repeat_byte(0xFA),
-        portal: bilauncher_core::PORTAL,
+        portal: predictlaunch_core::PORTAL,
         batch_ms: 0,
         poll_ms: 1000,
         dev_faucet: false,
         start_block: 0,
         price_api: None,
         quote_symbol: None,
-        oracle: bilauncher_sequencer::testutil::offline_oracle(),
+        oracle: predictlaunch_sequencer::testutil::offline_oracle(),
     }
 }
 
@@ -276,8 +276,8 @@ async fn keeper_runs_actions_against_chain() {
 // ------------------------------------------------------------------------- question launches
 
 use alloy_primitives::B256;
-use bilauncher_core::QUESTION_DEADLINE;
-use bilauncher_sequencer::keeper::{decide, proposals_due};
+use predictlaunch_core::QUESTION_DEADLINE;
+use predictlaunch_sequencer::keeper::{decide, proposals_due};
 
 fn proposed(id: u64, outcome: u8, at: u64, final_: bool) -> ChainEvent {
     ChainEvent::OutcomeProposed {

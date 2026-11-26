@@ -18,7 +18,7 @@ export interface StoredKey {
 export const DEFAULT_KEY_TTL = 7 * 24 * 3600
 
 const storageKey = (chainId: number, exchange: Address, owner: Address) =>
-  `bilauncher:tradingKey:${chainId}:${exchange.toLowerCase()}:${owner.toLowerCase()}`
+  `predictlaunch:tradingKey:${chainId}:${exchange.toLowerCase()}:${owner.toLowerCase()}`
 
 function store(): Storage | null {
   try {

@@ -1,12 +1,12 @@
 [package]
-name = "bilauncher-sequencer"
-description = "bilauncher sequencer: chain I/O, keeper, HTTP/WS API, price stream"
+name = "predictlaunch-sequencer"
+description = "predictlaunch sequencer: chain I/O, keeper, HTTP/WS API, price stream"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-bilauncher-core = { path = "../core" }
+predictlaunch-core = { path = "../core" }
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 serde.workspace = true

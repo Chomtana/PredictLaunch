@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bilauncher one-command local demo on an anvil fork of BSC testnet.
+# PredictLaunch one-command local demo on an anvil fork of BSC testnet.
 #
 #   scripts/dev.sh                 fork + deploy + feed relay + sequencer + seeded bots (live) + frontend
 #   scripts/dev.sh --no-seed       ... without the seeded launches and bots
@@ -83,8 +83,8 @@ scrub() { perl -pe 'BEGIN { $u = $ENV{BSC_TESTNET_RPC_URL} } s/\Q$u\E/<live-rpc>
 
 step "building contracts + sequencer"
 (cd "$ROOT/contracts" && { [ -d dependencies ] || forge soldeer install; } && forge build -q) 2>&1 | scrub
-(cd "$ROOT" && cargo build -q -p bilauncher-sequencer)
-SEQ_BIN="$ROOT/target/debug/bilauncher-sequencer"
+(cd "$ROOT" && cargo build -q -p predictlaunch-sequencer)
+SEQ_BIN="$ROOT/target/debug/predictlaunch-sequencer"
 (cd "$ROOT/frontend" && { [ -d node_modules ] || pnpm install --frozen-lockfile; })
 
 step "starting anvil fork of BSC testnet on $RPC (chain 97)"
@@ -94,7 +94,7 @@ for _ in $(seq 120); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break;
 [ "$(cast chain-id --rpc-url "$RPC" 2>/dev/null)" = 97 ] || fail "anvil did not start" "$DEV/anvil.log"
 START_BLOCK="$(cast block-number --rpc-url "$RPC")"
 
-step "deploying Exchange + BilauncherLauncherFactory (owner #0, operator #9, quote $QUOTE_SYMBOL)"
+step "deploying Exchange + PredictLaunchLauncherFactory (owner #0, operator #9, quote $QUOTE_SYMBOL)"
 (cd "$ROOT/contracts" && OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$QUOTE_TOKEN" forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$RPC" --broadcast --private-key "$DEPLOYER_KEY" 2>&1 | scrub >"$DEV/deploy.log") || fail "deploy" "$DEV/deploy.log"
 EXCHANGE="$(jq -r .exchange "$DEV/deploy.json")"
@@ -134,14 +134,14 @@ fi
 
 if [ $FRONTEND = 1 ]; then
   step "starting frontend on http://localhost:$WEB_PORT"
-  (cd "$ROOT/frontend" && BILAUNCHER_API="$API" exec pnpm exec vite --port "$WEB_PORT" --strictPort) >"$DEV/frontend.log" 2>&1 &
+  (cd "$ROOT/frontend" && PREDICTLAUNCH_API="$API" exec pnpm exec vite --port "$WEB_PORT" --strictPort) >"$DEV/frontend.log" 2>&1 &
   PIDS+=($!)
   for _ in $(seq 100); do curl -sf "http://localhost:$WEB_PORT" >/dev/null && break; sleep 0.2; done
 fi
 
 cat <<EOF
 
-  bilauncher local demo is up.  (logs: .dev/*.log)
+  PredictLaunch local demo is up.  (logs: .dev/*.log)
 
 $([ $FRONTEND = 1 ] && echo "    frontend    http://localhost:$WEB_PORT")
     sequencer   $API/api/status
@@ -149,7 +149,7 @@ $([ $FRONTEND = 1 ] && echo "    frontend    http://localhost:$WEB_PORT")
     Exchange    $EXCHANGE
     Factory     $FACTORY
 
-  MetaMask: add a CUSTOM network "bilauncher fork", RPC $RPC, chain ID 97, symbol BNB.
+  MetaMask: add a CUSTOM network "PredictLaunch fork", RPC $RPC, chain ID 97, symbol BNB.
   It has the same chain ID as the real BSC testnet: keep them as separate networks, never mix them,
   and never send real testnet funds to the dev keys below (PUBLIC anvil keys, LOCAL ONLY):
     #0  0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80

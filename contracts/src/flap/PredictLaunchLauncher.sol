@@ -15,19 +15,19 @@ import {ILaunchRail} from "src/interfaces/ILaunchRail.sol";
 import {Exchange} from "src/Exchange.sol";
 
 string constant BL_TITLE_ZH = unicode"预测市场发射";
-string constant BL_TITLE_EN = "bilauncher prediction launch";
+string constant BL_TITLE_EN = "predictlaunch prediction launch";
 string constant BL_SUMMARY_ZH =
     unicode"创作者设定一个价格预测市场。赢家获得每份 1 减去抽成，抽成用于注入流动性池。达到目标后，募集的报价代币与 50% 的代币供应注入池子，另外 50% 由输家按输掉的份额领取。";
 string constant BL_SUMMARY_EN =
     "A binary Up/Down price market funds the pool: winners are paid 1 minus the creator's cut, and the cut is the raise. At the target, the raise and 50% of the supply seed the pool; the other 50% is claimed by the losers in proportion to their losing shares.";
 
-/// @title BilauncherLauncher
-/// @notice The Flap Launcher (and graduation rail) of one bilauncher launch. Deployed per launch by
-///         `BilauncherLauncherFactory` as a beacon proxy inside `Portal.newLauncher`. It locks the launch salt at
+/// @title PredictLaunchLauncher
+/// @notice The Flap Launcher (and graduation rail) of one predictlaunch launch. Deployed per launch by
+///         `PredictLaunchLauncherFactory` as a beacon proxy inside `Portal.newLauncher`. It locks the launch salt at
 ///         creation, and when the Exchange's market graduates it receives the raise, calls `launchTaxTokenV2`
 ///         (1B supply, 500M + raise in the pool, 1% buy/sell tax fully burned, the other 500M distributed EXPLICIT
 ///         to this contract) and forwards the 500M to the Exchange for the losers.
-contract BilauncherLauncher is LauncherBase, Initializable, IStrategy, ILaunchRail {
+contract PredictLaunchLauncher is LauncherBase, Initializable, IStrategy, ILaunchRail {
     using SafeERC20 for IERC20;
 
     uint256 public constant TOTAL_SUPPLY = 1_000_000_000e18;

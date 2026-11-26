@@ -1,8 +1,8 @@
-# bilauncher — shared interface spec (single source of truth)
+# PredictLaunch — shared interface spec (single source of truth)
 
 Everything that crosses the contracts ⇄ sequencer ⇄ frontend boundary is defined here. If you change it,
-every side changes. Design rationale: `docs/superpowers/specs/2026-11-25-bilauncher-design.md`.
-Build plan: `docs/superpowers/plans/2026-11-25-bilauncher.md`.
+every side changes. Design rationale: `docs/superpowers/specs/2026-11-25-predictlaunch-design.md`.
+Build plan: `docs/superpowers/plans/2026-11-25-predictlaunch.md`.
 
 ## Layout
 
@@ -59,7 +59,7 @@ scripts/     dev.sh (fork demo), e2e.sh
   excluded). `setFeed(feed, enabled)`.
 - Atlas feed state: storage slot `0x32` = `updatedAt(uint48) | startedAt(uint48) | answer(uint80)`,
   high bits to low.
-- EIP-712 domain: `name "bilauncher"`, `version "1"`, `chainId 97`, `verifyingContract = Exchange`.
+- EIP-712 domain: `name "predictlaunch"`, `version "1"`, `chainId 97`, `verifyingContract = Exchange`.
 - UI shows amounts in BNB, with a USD estimate from the BNB/USD feed. Use Polymarket's layout only,
   never its name or branding.
 - Commit after every task step marked "Commit". Never commit `.env`.
@@ -109,7 +109,7 @@ struct LaunchConfig { string name; string symbol; string imageURI; address feed;
                       uint64 settleTime; uint16 cutBps; uint256 target; bytes32 salt;
                       string question; uint256 marketId; }      // question/marketId: see "Question launches"
 // Users create a launch with Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig)).
-// The factory deploys a BilauncherLauncher (beacon proxy), whose initialize locks the salt, then calls:
+// The factory deploys a PredictLaunchLauncher (beacon proxy), whose initialize locks the salt, then calls:
 function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
     external returns (uint256 launchId);                             // onlyFactory; validates c (see rules)
 function snapshot(uint256 launchId) external;                        // settlement price, window [settleTime, settleTime+GRACE]
@@ -148,20 +148,20 @@ imageURI }`.
 ```solidity
 interface ILaunchRail { function launch(uint256 launchId, uint256 quoteAmount) external payable returns (address token, address pool); }
 
-// contracts/src/flap/BilauncherLauncherFactory.sol  (is LauncherFactoryBase)
+// contracts/src/flap/PredictLaunchLauncherFactory.sol  (is LauncherFactoryBase)
 constructor(address hub, address guardian, address exchange);
 // _newLauncher(creator, data): c = abi.decode(data, (LaunchConfig)); deploy BeaconProxy;
-//   BilauncherLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
-//   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); BilauncherLauncher(l).setLaunchId(id)
+//   PredictLaunchLauncher(l).initialize{value: msg.value}(hub, creator, exchange, c);   // locks salt
+//   id = Exchange.registerLaunch(l, creator, predictedToken(c.salt), c); PredictLaunchLauncher(l).setLaunchId(id)
 // launcherDataSchema(): fields name, symbol, imageURI, feed, strike, settleTime, cutBps, target, salt
 
-// contracts/src/flap/BilauncherLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
+// contracts/src/flap/PredictLaunchLauncher.sol  (is LauncherBase, IStrategy, ILaunchRail)
 function initialize(address hub, address creator, address exchange, LaunchConfig calldata c) external payable; // once
 function launch(uint256 launchId, uint256 quoteAmount) external payable returns (address token, address pool); // only exchange; native: launchTaxTokenV2{value: quoteAmount}; ERC20: approve the Portal for quoteAmount, launchTaxTokenV2 pulls it
 function quoteToken() external view returns (address);               // read from the Exchange in initialize
 function initializeDistribution(address token, uint256 amount, bytes calldata, bytes32) external; // onlyHub, during launch only
 // after the Portal call returns, launch() approves and calls exchange.receiveLoserTokens(launchId, token, 500M)
-// _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "bilauncher prediction launch"
+// _description(): name, symbol, quote address(0), target, poolTokenRatio 0.5e18, title "predictlaunch prediction launch"
 ```
 **Rules the contract enforces** (from the spec; one line each):
 - `registerLaunch` (factory only): feed enabled, `strike > 0`, `settleTime − now ∈ [MIN_DURATION,
@@ -384,4 +384,4 @@ insufficient_shares, unknown_order, expired, key_expired, group_too_large`.
 `fixtures/eip712-vectors.json` (written by Task 0, consumed by the C, S and F tests):
 `{domain:{name,version,chainId,verifyingContract}, orders:[{order, hash, signer, sig}],
 keys:[{auth, hash, sig}], cancels:[{cancel, hash, sig}]}`. Signers: anvil keys #0 (Alice) and #1
-(Bob), plus a trading key generated from `keccak256("bilauncher-key")`.
+(Bob), plus a trading key generated from `keccak256("predictlaunch-key")`.

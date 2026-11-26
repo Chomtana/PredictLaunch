@@ -20,13 +20,13 @@ import {
 const d: Domain = { chainId: Number(vectors.domain.chainId), exchange: vectors.domain.verifyingContract as Address }
 const ALICE = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80')
 const BOB = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d')
-const KEY = privateKeyToAccount(keccak256(stringToBytes('bilauncher-key')))
+const KEY = privateKeyToAccount(keccak256(stringToBytes('predictlaunch-key')))
 const signers = [ALICE, BOB, KEY]
 const signerOf = (a: string) => signers.find((s) => s.address.toLowerCase() === a.toLowerCase())!
 
 describe('EIP-712 matches the shared vectors', () => {
   it('domain and fixture accounts', () => {
-    expect(vectors.domain.name).toBe('bilauncher')
+    expect(vectors.domain.name).toBe('predictlaunch')
     expect(vectors.domain.version).toBe('1')
     expect(d.chainId).toBe(97)
     expect(KEY.address).toBe(vectors.tradingKey)

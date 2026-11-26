@@ -20,8 +20,8 @@ describe('App', () => {
         <App />
       </AppProvider>,
     )
-    expect(screen.getAllByText('bilauncher').length).toBeGreaterThan(0)
-    expect(await screen.findByText(/Can't reach the bilauncher sequencer/)).toBeTruthy()
+    expect(screen.getAllByText('PredictLaunch').length).toBeGreaterThan(0)
+    expect(await screen.findByText(/Can't reach the PredictLaunch sequencer/)).toBeTruthy()
     expect(screen.getByText(/Sequencer offline: waiting/)).toBeTruthy()
   })
 })

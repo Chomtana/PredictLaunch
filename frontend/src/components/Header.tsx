@@ -10,7 +10,7 @@ export function Header({ route }: { route: string }) {
     <header className="header">
       <a className="brand" href="#/">
         <Logo />
-        <span>bilauncher</span>
+        <span>PredictLaunch</span>
       </a>
       <nav className="nav">
         <a className={route === 'home' ? 'on' : ''} href="#/">

@@ -5,12 +5,12 @@ use std::sync::Arc;
 use alloy_primitives::{Address, B256};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use bilauncher_core::state::ChainEvent;
-use bilauncher_sequencer::api;
-use bilauncher_sequencer::app::{App, Settings};
-use bilauncher_sequencer::cournot::{CournotConfig, Mode};
-use bilauncher_sequencer::oracle::OracleSettings;
-use bilauncher_sequencer::testutil::*;
+use predictlaunch_core::state::ChainEvent;
+use predictlaunch_sequencer::api;
+use predictlaunch_sequencer::app::{App, Settings};
+use predictlaunch_sequencer::cournot::{CournotConfig, Mode};
+use predictlaunch_sequencer::oracle::OracleSettings;
+use predictlaunch_sequencer::testutil::*;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -39,7 +39,7 @@ impl T {
             domain: test_domain(),
             public_rpc: "http://127.0.0.1:8545".into(),
             factory: Address::repeat_byte(0xFA),
-            portal: bilauncher_core::PORTAL,
+            portal: predictlaunch_core::PORTAL,
             batch_ms: 2000,
             poll_ms: 1000,
             dev_faucet: false,

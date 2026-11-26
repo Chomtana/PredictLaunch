@@ -1,4 +1,4 @@
-# bilauncher — design
+# predictlaunch — design
 
 Date: 2026-11-25. Status: ready for approval (builder check done).
 
@@ -184,7 +184,7 @@ The user picked B.
    it must be the one launching) calls `launchTaxTokenV2{value: raised}` with `poolQuote = raised`. Total
    supply is **always 1,000,000,000 tokens and the split is always 50/50** (user's decision, not
    creator-configurable): `poolToken` = 500M goes into the pool, and the other 500M is handed to the
-   bilauncher contract in the launch transaction (Flap `Distribution` target EXPLICIT, strategy =
+   predictlaunch contract in the launch transaction (Flap `Distribution` target EXPLICIT, strategy =
    that contract, implementing `IStrategy.initializeDistribution`), where losers claim it.
    **Tax: 1% buy and sell, 100% burned** (a single DEFLATION fee slot of 10000 bps). The user wanted
    no tax, but the Portal rejects anything below 1%. Burning is the closest to "no tax": nobody
@@ -307,7 +307,7 @@ The user picked B.
 
 The Flap track requires "a Launcher Factory, a complete token launch on BSC Testnet, and a custom
 launch UI" (hackathon page, read 2026-11-25). This replaces the earlier direct-launch idea.
-- `BilauncherLauncherFactory` (on Flap's `LauncherFactoryBase`) deploys one `BilauncherLauncher`
+- `PredictLaunchLauncherFactory` (on Flap's `LauncherFactoryBase`) deploys one `PredictLaunchLauncher`
   (on `LauncherBase`, a beacon proxy as in Flap's `MintLauncherFactory`) per launch. Users create a
   launch with `Portal.newLauncher{value: SALT_LOCK_FEE}(factory, abi.encode(LaunchConfig))`. The
   launcher locks the salt, and the factory registers the game with `Exchange`.

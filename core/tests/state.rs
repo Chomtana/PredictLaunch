@@ -1,8 +1,8 @@
 use alloy_primitives::{Address, U256};
-use bilauncher_core::abi;
-use bilauncher_core::eip712::{cancel_hash, TestKey};
-use bilauncher_core::state::{ChainEvent, Config, Msg, State};
-use bilauncher_core::{order_hash, Domain, ErrorCode, Order, Outcome, Side, SHARE_UNIT};
+use predictlaunch_core::abi;
+use predictlaunch_core::eip712::{cancel_hash, TestKey};
+use predictlaunch_core::state::{ChainEvent, Config, Msg, State};
+use predictlaunch_core::{order_hash, Domain, ErrorCode, Order, Outcome, Side, SHARE_UNIT};
 
 const E18: u128 = 1_000_000_000_000_000_000;
 const T0: u64 = 1_800_000_000;
@@ -131,7 +131,7 @@ impl W {
         price: u8,
         amount: u128,
         now: u64,
-    ) -> Result<bilauncher_core::state::MsgResult, bilauncher_core::state::AcceptError> {
+    ) -> Result<predictlaunch_core::state::MsgResult, predictlaunch_core::state::AcceptError> {
         let m = self.place_msg(k, launch, outcome, side, price, amount);
         self.s.accept_group(vec![m], ms(now)).map(|mut v| v.remove(0))
     }
@@ -486,13 +486,13 @@ fn trading_key_authorized_in_batch() {
     let mut w = W::new(2000);
     let (alice, bob) = (w.alice.clone(), w.bob.clone());
     let key = TestKey::from_seed("alice-session");
-    let auth = bilauncher_core::eip712::KeyAuthMsg {
+    let auth = predictlaunch_core::eip712::KeyAuthMsg {
         owner: alice.address(),
         key: key.address(),
         expiry: T0 + 3600,
         nonce: 1,
     };
-    let sig = alice.sign(&bilauncher_core::eip712::authorize_key_hash(
+    let sig = alice.sign(&predictlaunch_core::eip712::authorize_key_hash(
         &domain(),
         &auth,
     ));

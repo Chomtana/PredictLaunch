@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use alloy_primitives::{Address, B256, U256};
-use bilauncher_core::abi;
-use bilauncher_core::eip712::TestKey;
-use bilauncher_core::state::ChainEvent;
-use bilauncher_core::{order_hash, Domain, Order, Outcome, Side};
+use predictlaunch_core::abi;
+use predictlaunch_core::eip712::TestKey;
+use predictlaunch_core::state::ChainEvent;
+use predictlaunch_core::{order_hash, Domain, Order, Outcome, Side};
 
 use crate::chain::{Chain, ChainInfo};
 
@@ -155,7 +155,7 @@ impl Chain for FakeChain {
         };
         Ok(ChainInfo {
             challenge_window: if cw == 0 {
-                bilauncher_core::DEFAULT_CHALLENGE_WINDOW
+                predictlaunch_core::DEFAULT_CHALLENGE_WINDOW
             } else {
                 cw
             },
@@ -286,7 +286,7 @@ pub fn temp_dir(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let d = std::env::temp_dir().join(format!(
-        "bilauncher-{tag}-{}-{}-{}",
+        "predictlaunch-{tag}-{}-{}-{}",
         std::process::id(),
         now_secs(),
         N.fetch_add(1, Ordering::Relaxed)

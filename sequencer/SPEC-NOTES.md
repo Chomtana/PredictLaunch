@@ -3,8 +3,8 @@
 Where the sequencer reads SPEC.md in a way that isn't spelled out, or adds to it.
 
 ## Addenda from the orchestrator
-- `GET /api/config` returns `factory` (BilauncherLauncherFactory). It comes from `--factory` /
-  `BILAUNCHER_FACTORY` (default `0x0…0`). It also returns `devFaucet: bool`.
+- `GET /api/config` returns `factory` (PredictLaunchLauncherFactory). It comes from `--factory` /
+  `PREDICTLAUNCH_FACTORY` (default `0x0…0`). It also returns `devFaucet: bool`.
 - Amendment A1 (one market per launch) is implemented: one book per launch, `Order.round` must be 0
   (otherwise `not_tradable`), the keeper runs snapshot → resolve → redeem → graduate per launch, and no
   batch holds a fill whose `ts ≥ settleTime`.
@@ -54,7 +54,7 @@ Where the sequencer reads SPEC.md in a way that isn't spelled out, or adds to it
 - `/api/prices/:feed` (integration change): points come from the Atlas offchain API (`src/prices.rs`, one
   request per 2 s poll, 5 s timeout, own task so batching never waits) tagged `source: "atlas-api"` with `t` =
   the API timestamp (appended only when it moves); a feed missing from the API or older than 30 s is read
-  onchain (`source: "onchain"`, `t` = poll time). `--price-api` / `BILAUNCHER_PRICE_API` (`off` disables).
+  onchain (`source: "onchain"`, `t` = poll time). `--price-api` / `PREDICTLAUNCH_PRICE_API` (`off` disables).
   `currentPrice` carries `source` too.
 - `/api/prices/:feed`: all 18 feeds of the table (plus any other feed a launch uses) are polled every
   2 s. `t` is the poll time (unix seconds), not the feed's `updatedAt`. 24 h of history, ascending.

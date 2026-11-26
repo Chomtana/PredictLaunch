@@ -1,10 +1,10 @@
 //! Cournot client against a local mock server (no network): lenient parsing, error mapping,
 //! mock mode.
 
-use bilauncher_sequencer::cournot::{
+use predictlaunch_sequencer::cournot::{
     parse_probability, Cournot, CournotConfig, CournotError, Mode, SOURCE_LIVE, SOURCE_MOCK,
 };
-use bilauncher_sequencer::testutil::{market_json, MockCournot};
+use predictlaunch_sequencer::testutil::{market_json, MockCournot};
 use serde_json::json;
 
 fn live(base: &str, key: Option<&str>) -> Cournot {
@@ -239,11 +239,11 @@ async fn mock_mode_uses_the_market_price_and_never_calls_probability() {
 
 // ------------------------------------------------------------------ ids are per-response handles
 
-use bilauncher_sequencer::cournot::{pick_market, MarketKey};
+use predictlaunch_sequencer::cournot::{pick_market, MarketKey};
 
 #[test]
 fn pick_market_order() {
-    let mk = |id: u64, title: &str, end: &str, conf: f64| bilauncher_sequencer::cournot::Market {
+    let mk = |id: u64, title: &str, end: &str, conf: f64| predictlaunch_sequencer::cournot::Market {
         id,
         title: title.into(),
         description: String::new(),

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use alloy_primitives::{Address, B256, U256};
 use anyhow::Context;
-use bilauncher_core::state::{AcceptError, Config, Msg, MsgResult, State};
-use bilauncher_core::{Domain, BNB_USD_FEED, FEEDS};
+use predictlaunch_core::state::{AcceptError, Config, Msg, MsgResult, State};
+use predictlaunch_core::{Domain, BNB_USD_FEED, FEEDS};
 use tokio::sync::{broadcast, watch};
 
 use crate::chain::{Chain, ChainInfo};
