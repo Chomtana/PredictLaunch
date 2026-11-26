@@ -370,6 +370,8 @@ pub struct RpcChain {
     /// submitBatch calldata by tx hash, persisted (`with_batch_cache`) so a restart's replay does not
     /// refetch every batch tx.
     batch_cache: Option<BatchCache>,
+    /// Exchange logs, persisted (`with_log_cache`) so a restart's replay reads history from disk.
+    log_cache: Option<crate::logcache::LogCache>,
 }
 
 /// Append-only `<tx hash> <calldata hex>` lines. A tx hash commits to its input, so an entry is
@@ -442,6 +444,9 @@ const BATCH_TX_CONCURRENCY: usize = 16;
 /// Max blocks per `eth_getLogs`.
 const LOG_CHUNK: u64 = 2_000;
 
+/// Consecutive failed `eth_getLogs` (each halving the range) before a poll gives up.
+const LOG_RETRIES: u32 = 12;
+
 impl RpcChain {
     pub fn new(
         rpc_url: &str,
@@ -470,6 +475,7 @@ impl RpcChain {
             signer,
             send_lock: tokio::sync::Mutex::new(()),
             batch_cache: None,
+            log_cache: None,
         })
     }
 
@@ -480,6 +486,43 @@ impl RpcChain {
         tracing::info!("batch cache {}: {n} batches", cache.path.display());
         self.batch_cache = Some(cache);
         Ok(self)
+    }
+
+    /// Keep Exchange logs in `path` across restarts (see `logcache`), for the deployment starting at `start`.
+    pub fn with_log_cache(mut self, path: std::path::PathBuf, start: u64) -> anyhow::Result<Self> {
+        let cache = crate::logcache::LogCache::load(path.clone(), self.exchange, start)?;
+        let (n, upto) = cache.len();
+        tracing::info!("log cache {}: {n} logs, up to block {upto:?}", path.display());
+        self.log_cache = Some(cache);
+        Ok(self)
+    }
+
+    async fn block_hash(&self, n: u64) -> anyhow::Result<B256> {
+        let b = self
+            .provider
+            .get_block_by_number(n.into())
+            .await?
+            .with_context(|| format!("block {n} not found"))?;
+        Ok(b.header.hash)
+    }
+
+    /// Once per run: keep the cache up to its newest mark the chain still agrees with.
+    async fn verify_log_cache(&self, c: &crate::logcache::LogCache) -> anyhow::Result<()> {
+        if c.is_verified() {
+            return Ok(());
+        }
+        let marks = c.marks();
+        let mut keep = None;
+        for (i, m) in marks.iter().enumerate().rev() {
+            if self.block_hash(m.block).await? == m.hash {
+                keep = Some(i);
+                break;
+            }
+        }
+        if keep.map_or(0, |i| i + 1) != marks.len() {
+            tracing::warn!("log cache: {} newest mark(s) no longer on chain, refetching from there", marks.len() - keep.map_or(0, |i| i + 1));
+        }
+        c.verify(keep)
     }
 
     /// Graduate Four launches (those whose rail is `rail`) through the OpenFour rail.
@@ -620,26 +663,53 @@ impl RpcChain {
 
 impl Chain for RpcChain {
     async fn poll_events(&self, from: u64) -> anyhow::Result<(Vec<ChainEvent>, u64)> {
+        use crate::logcache::RawLog;
         let head = self.provider.get_block_number().await?;
         let mut out = Vec::new();
         // (index in `out`, tx hash) of each BatchSubmitted: their calldata is fetched at the end.
         let mut batch_txs: Vec<(usize, B256)> = Vec::new();
         let mut from = from;
+        // History already on disk first (restarts), then the RPC for the rest.
+        let mut raw: Vec<RawLog> = Vec::new();
+        if let Some(c) = &self.log_cache {
+            self.verify_log_cache(c).await?;
+            let (cached, next) = c.cached(from);
+            raw = cached;
+            from = from.max(next);
+        }
+        let fetch_from = from;
+        let mut fetched: Vec<RawLog> = Vec::new();
+        // Blocks per request, adaptive: the public book (OrderPosted) makes busy ranges megabytes of logs, which
+        // some RPCs cut off mid-body. A failed request halves the range and retries; a good one grows it back.
+        let mut span = LOG_CHUNK;
+        let mut failures = 0u32;
+        let proposed = <IExchange::OutcomeProposed as alloy_sol_types::SolEvent>::SIGNATURE_HASH;
         while from <= head {
-            let to = head.min(from + LOG_CHUNK - 1);
+            let to = head.min(from + span - 1);
             let filter = Filter::new()
                 .address(self.exchange)
                 .from_block(from)
                 .to_block(to);
-            let logs = self.provider.get_logs(&filter).await?;
+            let logs = match self.provider.get_logs(&filter).await {
+                Ok(l) => l,
+                Err(e) => {
+                    failures += 1;
+                    if failures > LOG_RETRIES {
+                        return Err(e.into());
+                    }
+                    tracing::warn!("eth_getLogs {from}..{to} failed ({e}); retrying with {} blocks", (span / 2).max(1));
+                    span = (span / 2).max(1);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+            failures = 0;
+            span = (span * 2).min(LOG_CHUNK);
             for log in logs {
                 let topics = log.topics().to_vec();
-                let data = log.data().data.clone();
                 let mut ts = log.block_timestamp.unwrap_or(0);
                 // A question proposal's challenge window runs from its block time: read the block
                 // when the node leaves `blockTimestamp` out of its logs.
-                let proposed =
-                    <IExchange::OutcomeProposed as alloy_sol_types::SolEvent>::SIGNATURE_HASH;
                 if ts == 0 && topics.first() == Some(&proposed) {
                     if let Some(n) = log.block_number {
                         if let Ok(Some(b)) = self.provider.get_block_by_number(n.into()).await {
@@ -647,35 +717,51 @@ impl Chain for RpcChain {
                         }
                     }
                 }
-                match decode_log(&topics, &data, ts) {
-                    Some(ChainEvent::BatchSubmitted {
+                fetched.push(RawLog {
+                    block: log.block_number.unwrap_or(to),
+                    tx: log.transaction_hash,
+                    ts,
+                    data: log.data().data.clone(),
+                    topics,
+                });
+            }
+            from = to + 1;
+        }
+        if let Some(c) = &self.log_cache {
+            let confirmed = match c.mark_due(head) {
+                Some(b) => self.block_hash(b).await.ok().map(|h| (b, h)),
+                None => None,
+            };
+            c.record(fetch_from, from.saturating_sub(1), fetched.clone(), confirmed);
+        }
+        raw.extend(fetched);
+        for log in raw {
+            let RawLog { tx, ts, topics, data, .. } = log;
+            match decode_log(&topics, &data, ts) {
+                Some(ChainEvent::BatchSubmitted {
+                    batch_id,
+                    ts,
+                    fills,
+                    ..
+                }) => {
+                    if let Some(h) = tx {
+                        batch_txs.push((out.len(), h));
+                    }
+                    out.push(ChainEvent::BatchSubmitted {
                         batch_id,
                         ts,
                         fills,
-                        ..
-                    }) => {
-                        if let Some(h) = log.transaction_hash {
-                            batch_txs.push((out.len(), h));
-                        }
-                        out.push(ChainEvent::BatchSubmitted {
-                            batch_id,
-                            ts,
-                            fills,
-                            batch: None,
-                        });
-                    }
-                    Some(e) => out.push(e),
-                    None => {
-                        let known = event_topics()
-                            .iter()
-                            .any(|(t, _)| Some(t) == topics.first());
-                        if known {
-                            tracing::warn!("could not decode an Exchange log {:?}", topics.first());
-                        }
+                        batch: None,
+                    });
+                }
+                Some(e) => out.push(e),
+                None => {
+                    let known = event_topics().iter().any(|(t, _)| Some(t) == topics.first());
+                    if known {
+                        tracing::warn!("could not decode an Exchange log {:?}", topics.first());
                     }
                 }
             }
-            from = to + 1;
         }
         // One tx lookup per batch, concurrently (and from the cache when it has them): on startup the
         // replay covers every batch since the deployment, and one at a time (~1 s each on some

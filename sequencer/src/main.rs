@@ -72,6 +72,10 @@ struct Args {
     /// every batch tx. Unset: no cache.
     #[arg(long, env = "PREDICTLAUNCH_BATCH_CACHE")]
     batch_cache: Option<std::path::PathBuf>,
+    /// File that keeps the Exchange's logs across restarts, so the startup replay reads history from disk
+    /// and asks the RPC only for newer blocks. Unset: no cache.
+    #[arg(long, env = "PREDICTLAUNCH_LOG_CACHE")]
+    log_cache: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -95,6 +99,9 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("finding the Exchange deployment block")?,
     };
+    if let Some(path) = &args.log_cache {
+        chain = chain.with_log_cache(path.clone(), start_block)?;
+    }
     let info = predictlaunch_sequencer::chain::Chain::info(&chain)
         .await
         .context("connecting to the RPC")?;

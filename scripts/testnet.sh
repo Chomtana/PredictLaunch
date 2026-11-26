@@ -160,7 +160,7 @@ echo "deployment: deployments/bsc-testnet.json (tracked: commit it so other clon
 step "starting sequencer on $API (operator $OP)"
 RUST_LOG="${RUST_LOG:-info}" "$ROOT/target/debug/predictlaunch-sequencer" --rpc "$RPC" --exchange "$EXCHANGE" \
   --factory "$FACTORY" --four-rail "$FOUR_RAIL" --operator-key "$OP_KEY" --port "$SEQ_PORT" \
-  --start-block "$(cat "$DEP/start-block")" --quote-symbol USDT --oracle-dir "$OUT/oracle" --batch-cache "$OUT/batch-cache.txt" 2>&1 | scrub >"$OUT/sequencer.log" &
+  --start-block "$(cat "$DEP/start-block")" --quote-symbol USDT --oracle-dir "$OUT/oracle" --batch-cache "$OUT/batch-cache.txt" --log-cache "$OUT/log-cache.txt" 2>&1 | scrub >"$OUT/sequencer.log" &
 PIDS+=($!)
 for _ in $(seq 240); do curl -sf "$API/api/status" >/dev/null && break; sleep 0.5; done
 curl -sf "$API/api/status" >/dev/null || { tail -30 "$OUT/sequencer.log"; exit 1; }
