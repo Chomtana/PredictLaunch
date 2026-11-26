@@ -327,8 +327,12 @@ contract FlapForkTest is Test {
         address[] memory us = new address[](2);
         us[0] = alice;
         us[1] = bob;
+        // native: credited to the internal balance; ERC20: paid straight to the wallet (approve-only trading)
+        bool native = _quote() == address(0);
+        uint256 before = native ? ex.balanceOf(alice) : _quoteBal(alice);
         ex.redeem(0, us);
-        assertEq(ex.balanceOf(alice), (10 ether - 4 ether + 5.6 ether) * k);
+        assertEq((native ? ex.balanceOf(alice) : _quoteBal(alice)) - before, 5.6 ether * k);
+        if (native) assertEq(ex.balanceOf(alice), (10 ether - 4 ether + 5.6 ether) * k);
         vm.prank(bob);
         ex.claimTokens(0);
         assertEq(IERC20(token).balanceOf(bob), 500_000_000e18);
