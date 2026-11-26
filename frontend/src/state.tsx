@@ -3,7 +3,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Address, Hex, PublicClient } from 'viem'
-import { api, ApiError, big, openFeed, type Book, type Config, type Feed, type LaunchDetail, type LaunchSummary, type Trade, type UserView, type WsMsg } from './lib/api.ts'
+import { api, ApiError, big, n, openFeed, type Book, type Config, type Feed, type LaunchDetail, type LaunchSummary, type Trade, type UserView, type WsMsg } from './lib/api.ts'
 import * as chainLib from './lib/chain.ts'
 import { chainFor, errMsg, publicClientFor, type LaunchConfig } from './lib/chain.ts'
 import { authorizeKeyMsg, randomNonce, signAuthorizeKey, signCancel, signOrder, type Domain, type Msg, type TypedSigner } from './lib/eip712.ts'
@@ -315,6 +315,19 @@ function useAppState() {
     const t = setInterval(refreshUser, 3000)
     return () => clearInterval(t)
   }, [wallet, refreshUser])
+
+  // Drop a stored trading key the sequencer doesn't know. A dev-fork restart redeploys the Exchange at the
+  // same address with a fresh sequencer, so the saved key would still look "enabled" while every order
+  // fails with bad_signature. A key enabled in the last 10 s is spared: a user view fetched before its
+  // AuthorizeKey landed would not list it yet.
+  useEffect(() => {
+    if (!wallet || !config || !key || !user?.keys) return
+    if (user.address && lc(user.address) !== lc(wallet.address)) return
+    if (Date.now() - key.createdMs < 10_000) return
+    if (user.keys.some((k) => lc(k.key) === lc(key.address) && n(k.expiry) * 1000 > Date.now())) return
+    clearKey(config.chainId, config.exchange, wallet.address)
+    setKey(null)
+  }, [user, key, wallet, config])
 
   const ownerSigner = useCallback(
     (w: Wallet): TypedSigner => ({ signTypedData: (a) => w.client.signTypedData({ ...a, account: w.account }) }),

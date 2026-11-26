@@ -229,6 +229,14 @@ pub fn user(st: &State, u: Address) -> Value {
         })
         .collect();
     launches.reverse();
+    // Trading keys the sequencer accepts for this owner (onchain or pending in a batch), latest expiry.
+    let mut keys: Vec<(Address, u64)> = Vec::new();
+    for ((owner, key), _) in st.chain_keys.iter().chain(st.pending_keys.iter()) {
+        if *owner == u && !keys.iter().any(|(k, _)| k == key) {
+            keys.push((*key, st.key_expiry(u, *key).unwrap_or_default()));
+        }
+    }
+    keys.sort();
     let balance = st.ledger.balance(u);
     let locked = st.locked_bnb(u);
     json!({
@@ -244,6 +252,10 @@ pub fn user(st: &State, u: Address) -> Value {
             .map(|(l, up, down)| json!({"launchId": l, "up": s(up), "down": s(down)}))
             .collect::<Vec<_>>(),
         "launches": launches,
+        "keys": keys
+            .into_iter()
+            .map(|(key, expiry)| json!({"key": key, "expiry": expiry}))
+            .collect::<Vec<_>>(),
     })
 }
 

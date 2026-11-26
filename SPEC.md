@@ -366,7 +366,9 @@ GET  /api/prices/:feed?since=unixSec  [{t, price, source?}]   price = 18-dec dec
                              is > 30 s old. Chart only: settlement always uses the onchain snapshot.
 GET  /api/user/:addr        {balance, locked, pendingWithdrawals:[...], orders:[OrderView],
                              positions:[{launchId, up, down}], launches:[{launchId, loserShares,
-                             claimableTokens}]}
+                             claimableTokens}], keys:[{key, expiry}]}  (keys: trading keys the
+                             sequencer accepts, onchain or pending; the UI drops a stored key
+                             missing here, e.g. after a dev-fork restart)
 POST /api/msgs              body: [Msg] (atomic group, ≤ 16). Msg =
                              {kind:"place", order:{...all Order fields as strings}, sig, ifResting?:false}
                            | {kind:"cancel", owner, orderHash, nonce, sig, ifResting?:bool}

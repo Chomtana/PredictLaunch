@@ -406,3 +406,25 @@ async fn erc20_quote_config_and_faucet_mint() {
     assert_eq!(i.quote_mints[&t.alice.address()], U256::from(10_000u128 * E18));
     assert_eq!(i.balances[&t.alice.address()], U256::from(1000u128 * E18), "gas too");
 }
+
+#[tokio::test]
+async fn user_view_lists_trading_keys() {
+    use predictlaunch_core::eip712::{authorize_key_hash, KeyAuthMsg};
+    let t = T::new(false).await;
+    let owner = t.alice.address();
+    let key = t.bob.address();
+    // A fresh sequencer knows no keys (the dev-fork restart case the UI checks for).
+    let u = t.get(&format!("/api/user/{owner}")).await;
+    assert_eq!(u["keys"], json!([]));
+
+    let m = KeyAuthMsg { owner, key, expiry: 4_000_000_000, nonce: 7 };
+    let sig = t.alice.sign(&authorize_key_hash(&test_domain(), &m));
+    let msg = json!({
+        "kind": "authorizeKey", "owner": owner, "key": key, "expiry": "4000000000", "nonce": "7",
+        "sig": format!("0x{}", alloy_primitives::hex::encode(&sig)),
+    });
+    let (s, v) = t.req("POST", "/api/msgs", Some(json!([msg]))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let u = t.get(&format!("/api/user/{owner}")).await;
+    assert_eq!(u["keys"], json!([{"key": key, "expiry": 4_000_000_000u64}]));
+}

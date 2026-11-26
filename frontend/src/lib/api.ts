@@ -203,12 +203,15 @@ export interface UserLaunch {
   claimableTokens: string
 }
 export interface UserView {
+  address?: string
   balance: string
   locked: string
   pendingWithdrawals: { idx?: Num; amount?: string }[]
   orders: OrderView[]
   positions: Position[]
   launches: UserLaunch[]
+  /** Trading keys the sequencer accepts for this owner (onchain or pending). Absent on older sequencers. */
+  keys?: { key: string; expiry: Num }[]
 }
 
 export interface MsgResult {
