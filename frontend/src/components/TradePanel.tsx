@@ -142,8 +142,27 @@ export function TradePanel(p: TradePanelProps) {
       <div className="tp-head">
         <div>
           <div className="q">{p.title}</div>
-          <div className={`o ${outcome === 0 ? 'up' : 'down'}`}>
-            {side === 0 ? 'Buy' : 'Sell'} {NAME[outcome]}
+          <div className="tp-bal">
+            Balance:{' '}
+            {!p.connected ? (
+              '—'
+            ) : !p.position || (p.position.up === 0n && p.position.down === 0n) ? (
+              'None'
+            ) : (
+              <>
+                {p.position.up > 0n && (
+                  <span className="up">
+                    {fmtShares(p.position.up)} {NAME[0]}
+                  </span>
+                )}
+                {p.position.up > 0n && p.position.down > 0n && ' · '}
+                {p.position.down > 0n && (
+                  <span className="down">
+                    {fmtShares(p.position.down)} {NAME[1]}
+                  </span>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>
