@@ -3,8 +3,10 @@
 //   node --experimental-strip-types scripts/seed.ts --api http://127.0.0.1:8787 \
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
-// Each round creates 2-3 price launches and 1-2 Cournot question launches through Portal.newLauncher +
-// our factory (anvil #3 is the creator), picked at random from src/lib/catalog.ts:
+// Each round creates 2-3 price launches and 1-2 Cournot question launches on Flap (Portal.newLauncher + our
+// factory) and, when the sequencer has an OpenFour rail, one more price launch and one more question launch
+// on Four.meme (FourRail.createLaunch). Anvil #3 is the creator; everything is picked at random from
+// src/lib/catalog.ts:
 //   price:    a random BTC/BNB/ETH meme (name, symbol, coin icon), strike = live price -0.3%..+0.5% rounded
 //             to a nice number, settles in 10-30 min, random cut 10-30%, target 2.15-4 BNB (x1000 USDT)
 //   question: a random real-world theme (weather, Fed, Starship, football...) searched on Cournot through
@@ -98,8 +100,9 @@ async function resolve(message: string): Promise<ResolvedMarket[]> {
   return r.markets ?? []
 }
 
-/** A question launch on a random catalog theme, or null (logged) when Cournot has no market for it. */
-async function createQuestion(): Promise<Mkt | null> {
+/** A question launch on a random catalog theme, or null (logged) when Cournot has no market for it.
+ *  `four`: create it on Four.meme through the OpenFour rail instead of Flap. */
+async function createQuestion(four: Address | null = null): Promise<Mkt | null> {
   for (const theme of shuffle(QUESTIONS).slice(0, 4)) {
     const search = theme.search.replace('{tomorrow}', tomorrowLabel())
     let market: ResolvedMarket | undefined
@@ -124,8 +127,9 @@ async function createQuestion(): Promise<Mkt | null> {
       target: parseEther(pick(['2.15', '2.5', '3'])) * K,
     }
     try {
-      const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: pick(theme.images), question: market.title, marketId: BigInt(market.id) })
-      console.log(`seed: question launch #${id} $${d.symbol} "${d.name}": "${market.title}" in ${minutes} min, token ${token}`)
+      const c = { ...d, imageURI: pick(theme.images), question: market.title, marketId: BigInt(market.id) }
+      const { id, token, rail } = four ? await S.createFourLaunch(CREATOR, four, c) : await S.createLaunch(CREATOR, c)
+      console.log(`seed: question launch #${id} on ${four ? 'Four.meme' : 'Flap'} $${d.symbol} "${d.name}": "${market.title}" in ${minutes} min, token ${token}`)
       const resolveCents = market.yesPrice == null ? null : oracleCents(market.yesPrice)
       return { id, rail, strike: 0n, settleTime: d.settleTime, feed: NATIVE, target: d.target, cutBps: d.cutBps, oracleCents: null, resolveCents }
     } catch (e) {
@@ -137,17 +141,28 @@ async function createQuestion(): Promise<Mkt | null> {
   return null
 }
 
-/** One round: 2-3 price launches on distinct assets + 1-2 question launches. */
+/** One round. Flap: 2-3 price launches on distinct assets + 1-2 question launches. Four.meme (when the
+ *  sequencer has an OpenFour rail): one more price launch and one more question launch on top. */
 async function createAll(): Promise<Mkt[]> {
   const out: Mkt[] = []
-  // Flap by default; when the sequencer has an OpenFour rail, one price launch per round goes to Four.meme.
-  const four = await S.fourRail()
   const assets = shuffle<Asset>(['BTC', 'BNB', 'ETH']).slice(0, pick([2, 3]))
-  for (const [i, asset] of assets.entries()) out.push(await createPrice(asset, i === 0 ? four : null))
+  for (const asset of assets) out.push(await createPrice(asset))
   for (let i = pick([1, 2]); i > 0; i--) {
     const q = await createQuestion()
     if (q) out.push(q)
   }
+  const four = await S.fourRail()
+  if (!four) {
+    console.log('seed: the sequencer has no OpenFour rail; Flap launches only')
+    return out
+  }
+  try {
+    out.push(await createPrice(pick<Asset>(['BTC', 'BNB', 'ETH']), four))
+  } catch (e) {
+    console.log(`seed: Four.meme price launch failed: ${(e as Error).message.split('\n')[0]}`)
+  }
+  const q = await createQuestion(four)
+  if (q) out.push(q)
   return out
 }
 
