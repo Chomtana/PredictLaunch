@@ -90,7 +90,7 @@ if [ ! -f "$OUT/deploy.json" ]; then
   cast block-number --rpc-url "$RPC" >"$OUT/start-block"
   step "deploying Exchange + Flap factory from $OWNER (operator $OP)"
   (cd "$ROOT/contracts" && OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$FLAP_USDT" DEPLOY_JSON="$OUT/deploy.json" \
-    forge script script/Deploy.s.sol:Deploy --rpc-url "$RPC" --broadcast --legacy --with-gas-price 1gwei \
+    forge script script/Deploy.s.sol:Deploy --rpc-url "$RPC" --broadcast --legacy --with-gas-price 0.1gwei \
     --private-key "$DEPLOYER_KEY" 2>&1 | scrub >"$OUT/deploy.log") || { tail -30 "$OUT/deploy.log"; exit 1; }
 fi
 EXCHANGE="$(jq -r .exchange "$OUT/deploy.json")"

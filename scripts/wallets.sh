@@ -12,7 +12,7 @@
 #   scripts/wallets.sh --rpc <url>   another RPC (e.g. http://127.0.0.1:8545, the dev fork)
 #   scripts/wallets.sh --keys        also print the private keys (careful: they control the funds)
 #
-# Recommended tBNB is budgeted at 1 gwei (testnet usually charges far less) from measured gas: the Flap deploy
+# Recommended tBNB is budgeted at 1 gwei (10x headroom: every tx is sent at 0.1 gwei) from measured gas: the Flap deploy
 # is ~10.3M gas, our OpenFour fork-deploy ~30M (31 txs) plus ~8.8M to register the preset, a Flap launch ~1.5M
 # gas plus the Portal's 0.005 BNB salt-lock fee. USDT (Flap's faucet token) needs no funding: its mint is
 # public and the bots mint their own.
@@ -127,12 +127,19 @@ if [ $public_on_real = 1 ]; then
   exit 1
 fi
 echo "Distributing $(fmt "$others") tBNB from the deployer $OWNER:"
+# Fixed 0.1 gwei legacy price (BSC testnet's going rate): RPCs can suggest less (eth_gasPrice 0.05 gwei) than
+# validators include, leaving the transfer pending forever. Nonces start at the latest MINED one, so a transfer stuck
+# from an earlier run is replaced (same nonce, higher price) rather than queued behind.
+nonce="$(cast nonce "$OWNER" --block latest --rpc-url "$RPC")"
 for i in "${!ROLE_NAMES[@]}"; do
   [ "$i" = 0 ] && continue
   [ "${SHORT[$i]}" = 0 ] && continue
   printf '  %-9s %s  +%s tBNB ... ' "${ROLE_NAMES[$i]}" "${ROLE_ADDRS[$i]}" "$(fmt "${SHORT[$i]}")"
-  tx="$(cast send --rpc-url "$RPC" --private-key "$DEPLOYER_KEY" "${ROLE_ADDRS[$i]}" --value "${SHORT[$i]}" --json 2>&1 | jq -r '.transactionHash // empty' 2>/dev/null || true)"
-  if [ -n "$tx" ]; then echo "$tx"; else echo "FAILED"; exit 1; fi
+  out="$(cast send --rpc-url "$RPC" --private-key "$DEPLOYER_KEY" "${ROLE_ADDRS[$i]}" --value "${SHORT[$i]}" \
+    --legacy --gas-price 0.1gwei --nonce "$nonce" --timeout 90 --json 2>&1 || true)"
+  tx="$(echo "$out" | jq -r 'select(.status == "0x1") | .transactionHash // empty' 2>/dev/null || true)"
+  if [ -n "$tx" ]; then echo "$tx"; else echo "FAILED"; echo "$out" | tail -5 >&2; exit 1; fi
+  nonce=$((nonce + 1))
 done
 echo
 read_balances

@@ -361,6 +361,10 @@ pub struct RpcChain {
 /// How long a Four create signature stays valid (`CreateTokenArgs.validTimestamp`).
 const FOUR_SIG_TTL: u64 = 600;
 
+/// Fixed legacy gas price, 0.1 gwei: BSC testnet RPCs suggest less (eth_gasPrice 0.05 gwei) than validators
+/// include, and such txs stay pending forever. The dev fork (base fee 0) takes it too.
+const GAS_PRICE: u128 = 100_000_000;
+
 /// Max blocks per `eth_getLogs`.
 const LOG_CHUNK: u64 = 2_000;
 
@@ -466,7 +470,8 @@ impl RpcChain {
         let tx = TransactionRequest::default()
             .with_from(self.operator)
             .with_to(to)
-            .with_input(call.abi_encode());
+            .with_input(call.abi_encode())
+            .with_gas_price(GAS_PRICE);
         // Simulate first so a revert comes back as an error instead of a failed receipt.
         self.provider
             .call(tx.clone())

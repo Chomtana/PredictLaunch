@@ -191,6 +191,28 @@ export function chainFor(chainId: number, rpcUrl: string): Chain {
   })
 }
 
+/** 0.1 gwei: what BSC testnet validators actually include. */
+export const BSC_TESTNET_GAS_PRICE = 100_000_000n
+
+/**
+ * On BSC testnet (chain 97, also the dev fork), send every tx at a fixed legacy 0.1 gwei. RPCs fill fees lower
+ * (eth_gasPrice / eth_fillTransaction give 0.05 gwei) than validators include, and such txs stay pending forever.
+ * Overrides sendTransaction and writeContract (viem binds writeContract to the pre-extend client, so both are
+ * needed); a caller's own fee fields win.
+ */
+export function withFixedGas<C extends WalletClient>(client: C): C {
+  if (client.chain?.id !== 97) return client
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Fn = (args: any) => Promise<Hex>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fixed = (fn: Fn): Fn => (args: any) =>
+    fn(args.gasPrice != null || args.maxFeePerGas != null ? args : { ...args, gasPrice: BSC_TESTNET_GAS_PRICE })
+  return client.extend(() => ({
+    sendTransaction: fixed(client.sendTransaction as Fn),
+    writeContract: fixed(client.writeContract as Fn),
+  }) as never) as unknown as C
+}
+
 export function publicClientFor(chain: Chain): PublicClient {
   return createPublicClient({ chain, transport: http(), pollingInterval: 1000 }) as PublicClient
 }

@@ -28,7 +28,9 @@ if [ ! -d "$DOCS/.git" ]; then
   git clone -q "$DOCS_REPO" "$DOCS"
 fi
 git -C "$DOCS" fetch -q origin "$DOCS_COMMIT" 2>/dev/null || true
-git -C "$DOCS" checkout -q "$DOCS_COMMIT"
+git -C "$DOCS" checkout -q -f "$DOCS_COMMIT"  # -f: drops the gas-price patch below before switching
+# Its chain-97 txOverrides hardcode 0.05 gwei, which BSC testnet validators leave pending: send at 0.1 gwei.
+perl -pi -e 's/gasPrice: 50_000_000n/gasPrice: 100_000_000n/' "$DOCS/developer/fork-deploy/fork-from-chain.js"
 FD="$DOCS/developer/fork-deploy"
 # developer/ is an npm workspace root (no lockfile): install there, as openfour-docs' README does.
 [ -d "$DOCS/developer/node_modules/ethers" ] || (cd "$DOCS/developer" && npm install --no-audit --no-fund --loglevel=error)
@@ -40,5 +42,5 @@ cp "$FD/out/fork-deployment.json" "$DEV/openfour/fork-deployment.json"
 
 echo "openfour: registering the PredictLaunch preset and FourRail"
 (cd "$ROOT/contracts" && OPENFOUR_JSON="$DEV/openfour/fork-deployment.json" EXCHANGE="$EXCHANGE" SIGNER="$SIGNER" \
-  forge script script/DeployFour.s.sol:DeployFour --rpc-url "$RPC" --broadcast --private-key "$DEPLOYER_KEY")
+  forge script script/DeployFour.s.sol:DeployFour --rpc-url "$RPC" --broadcast --legacy --with-gas-price 0.1gwei --private-key "$DEPLOYER_KEY")
 echo "openfour: ready, rail $(jq -r .rail "$DEV/four.json") preset $(jq -r .presetId "$DEV/four.json")"

@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, decodeEventLog, encodeAbiParameters, encodeFunctionData, http, keccak256, parseAbi, parseEther, toHex, type Address, type Hex, type LocalAccount } from 'viem'
 import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
-import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, fourRailAbi, isNative, NATIVE, portalAbi, ZERO_SALT, type LaunchConfig } from '../src/lib/chain.ts'
+import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, fourRailAbi, isNative, NATIVE, portalAbi, ZERO_SALT, withFixedGas, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
 
@@ -111,7 +111,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     return j as T
   }
 
-  const wallet = (acct: LocalAccount) => createWalletClient({ chain, transport: http(rpc), account: acct })
+  const wallet = (acct: LocalAccount) => withFixedGas(createWalletClient({ chain, transport: http(rpc), account: acct }))
 
   async function send(acct: LocalAccount, req: { address: Address; abi: unknown; functionName: string; args?: unknown[]; value?: bigint }) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

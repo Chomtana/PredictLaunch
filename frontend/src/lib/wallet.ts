@@ -16,6 +16,7 @@ import {
   type WalletClient,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { withFixedGas } from './chain'
 
 export interface InjectedInfo {
   id: string
@@ -97,7 +98,7 @@ export async function connectInjected(w: InjectedInfo, chain: Chain, silent = fa
     kind: 'injected',
     address,
     label: w.name,
-    client: createWalletClient({ chain, transport: custom(w.provider) }),
+    client: withFixedGas(createWalletClient({ chain, transport: custom(w.provider) })),
     account: address,
     provider: w.provider,
   }
@@ -109,7 +110,7 @@ export function connectDev(index: number, chain: Chain): Wallet {
     kind: 'dev',
     address: acct.address,
     label: `Dev wallet · ${DEV_ACCOUNTS[index].name}`,
-    client: createWalletClient({ chain, transport: http(), account: acct }),
+    client: withFixedGas(createWalletClient({ chain, transport: http(), account: acct })),
     account: acct,
   }
 }
