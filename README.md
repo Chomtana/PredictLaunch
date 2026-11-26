@@ -71,6 +71,28 @@ x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUO
 
 ### Real BSC testnet (no fork)
 
+**One seed phrase for everything.** Put a BIP-39 `MNEMONIC` in `.env`. Every account comes from it
+(`scripts/keys.sh`): index 0 deployer/owner, 9 operator (batches, keeper, resolver, OpenFour `Core.signer`),
+3 seed creator, 5 market maker, 6/7 takers. Left empty, it is anvil's public test mnemonic, so the fork keeps
+using anvil #0..#9; `dev.sh` with your own mnemonic gives those accounts fork BNB.
+
+```bash
+scripts/wallets.sh             # addresses, needs, balances; tops up every account from the deployer
+scripts/wallets.sh --check     # list only, send nothing
+scripts/wallets.sh --rpc http://127.0.0.1:8545   # the same on the dev fork
+scripts/testnet.sh             # all of it: wallet check, deploy once (Flap + our OpenFour), sequencer, bots, frontend
+scripts/testnet.sh --no-four   # Flap only; also --no-seed, --no-frontend, --redeploy
+```
+
+**Fund only the deployer.** `wallets.sh` adds up what the other accounts are missing; when the deployer
+holds that plus what it keeps for itself (0.1 tBNB, or just the gas still needed to deploy when `testnet.sh`
+calls it), it sends each account its shortfall from the deployer; otherwise it prints the one amount to send
+to the deployer. USDT needs nothing: the bots mint Flap's faucet USDT (public `mint`) whenever
+they run low (every few ticks, and right away after an `insufficient_balance` rejection). On a real network
+they only warn when an account's gas runs low. `testnet.sh` refuses to run with the public anvil mnemonic.
+
+The manual steps below do the same by hand.
+
 `Deploy.s.sol` uses no cheats, so it deploys to the real testnet as is. It enables the factory on
 the Flap Portal by calling `whitelist(factory)` on Flap's testnet helper
 `0x77779969a11eff7582f3bCf48135A846A3457777` (anyone may call it; it exists on testnet only), then

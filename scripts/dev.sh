@@ -52,11 +52,10 @@ if [ -z "${BSC_TESTNET_RPC_URL:-}" ]; then
 fi
 export BSC_TESTNET_RPC_URL
 
-# anvil #0 = deployer and owner, #9 = batch operator (PUBLIC dev keys, fork only).
-DEPLOYER_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-OWNER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-OP_KEY=0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6
-OP=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
+# Accounts: index 0 = deployer and owner, 9 = operator, 3/5/6/7 = seed bots, all from MNEMONIC in .env
+# (scripts/keys.sh; unset = anvil's public test mnemonic, i.e. anvil #0..#9 exactly as before).
+command -v cast >/dev/null || { echo "missing cast"; exit 1; }
+. "$ROOT/scripts/keys.sh"
 
 for bin in anvil forge cast cargo pnpm node npm git jq curl; do
   command -v "$bin" >/dev/null || { echo "missing $bin"; exit 1; }
@@ -96,6 +95,11 @@ PIDS+=($!)
 for _ in $(seq 120); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break; sleep 0.5; done
 [ "$(cast chain-id --rpc-url "$RPC" 2>/dev/null)" = 97 ] || fail "anvil did not start" "$DEV/anvil.log"
 START_BLOCK="$(cast block-number --rpc-url "$RPC")"
+if ! using_anvil_mnemonic; then
+  # Your MNEMONIC's accounts are not anvil's prefunded ones: give them fork BNB (fork only, nothing real).
+  for a in "${ROLE_ADDRS[@]}"; do cast rpc --rpc-url "$RPC" anvil_setBalance "$a" 0x3635C9ADC5DEA00000 >/dev/null; done
+  echo "accounts from MNEMONIC: deployer $OWNER  operator $OP  (funded 1000 fork BNB each)"
+fi
 
 step "deploying Exchange + PredictLaunchLauncherFactory, enabling it on the Flap Portal (owner #0, operator #9, quote $QUOTE_SYMBOL)"
 (cd "$ROOT/contracts" && ALL_FEEDS=true OWNER="$OWNER" OPERATOR="$OP" QUOTE_TOKEN="$QUOTE_TOKEN" forge script script/Deploy.s.sol:Deploy \

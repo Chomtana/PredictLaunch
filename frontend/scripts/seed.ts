@@ -21,10 +21,9 @@
 // open interest passes each target before settlement. When no launch is tradable any more, a new
 // round is created so the demo never goes quiet.
 
-import { privateKeyToAccount } from 'viem/accounts'
 import { parseEther, type Address } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
-import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
+import { E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, roleAccount, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
 import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, isPriceMarket, pick, shuffle, type Asset, type Meme } from '../src/lib/catalog.ts'
 
 const RPC = arg('rpc', 'http://127.0.0.1:8545')!
@@ -32,7 +31,8 @@ const API = arg('api', 'http://127.0.0.1:8787')!
 const LIVE = process.argv.includes('--live')
 const S = setup(RPC, API, arg('deploy', '../.dev/deploy.json')!)
 
-const CREATOR = privateKeyToAccount(ANVIL_KEYS[3])
+// Accounts from MNEMONIC (.env; default anvil's public one): 3 creator, 5 maker, 6/7 takers (scripts/keys.sh).
+const CREATOR = roleAccount(3)
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
 const shares = (x: number) => (BigInt(Math.round(x * S.K * 100)) * UNIT) // x (x K) shares, 0.01 granularity
 const K = BigInt(S.K)
@@ -233,7 +233,7 @@ async function main() {
   let mkts = await createAll()
   console.log(`seed: warmed the fork for graduation in ${await S.warmGraduation(mkts[0].rail, mkts[0].id, mkts[0].target)} ms`)
   console.log('seed: funding bots #5 #6 #7 and authorizing trading keys')
-  const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(privateKeyToAccount(ANVIL_KEYS[i]), 300n * E18 * K)))
+  const [maker, t1, t2] = await Promise.all([5, 6, 7].map((i) => S.makeBot(roleAccount(i), 300n * E18 * K)))
   const takers = [t1, t2]
 
   for (const m of mkts) await quote(maker, m, await fair(m))
@@ -270,7 +270,18 @@ async function main() {
           console.log(`seed: #${l.id} ${l.symbol} pairs ${Number(BigInt(l.pairs)) / 1e18} projected ${Number(BigInt(l.projectedRaised)) / 1e18}/${Number(BigInt(l.target)) / 1e18} ${S.Q} up ${l.upPrice}`)
       }
     } catch (e) {
-      console.log('seed: tick failed:', (e as Error).message.split('\n')[0])
+      const msg = (e as Error).message.split('\n')[0]
+      console.log('seed: tick failed:', msg)
+      // A bot ran out of quote mid-tick: mint more right away instead of waiting for the periodic top-up.
+      if (/insufficient_balance|not enough free/i.test(msg)) {
+        for (const b of [maker, ...takers]) {
+          try {
+            if (await S.topUp(b, 100n * E18 * K, 200n * E18 * K)) console.log(`seed: topped up ${b.owner} after running low`)
+          } catch (err) {
+            console.log(`seed: top-up of ${b.owner} failed: ${(err as Error).message.split('\n')[0]}`)
+          }
+        }
+      }
     }
   }
 }

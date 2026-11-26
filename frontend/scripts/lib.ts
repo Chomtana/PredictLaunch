@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, decodeEventLog, encodeAbiParameters, encodeFunctionData, http, keccak256, parseAbi, parseEther, toHex, type Address, type Hex, type LocalAccount } from 'viem'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, fourRailAbi, isNative, NATIVE, portalAbi, ZERO_SALT, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
@@ -17,6 +17,15 @@ export function arg(k: string, d?: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : d
 }
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** anvil's public test mnemonic: its accounts #0..#9 are ANVIL_KEYS. */
+export const ANVIL_MNEMONIC = 'test test test test test test test test test test test junk'
+
+/** Account `index` of MNEMONIC (.env; default: anvil's public one), path m/44'/60'/0'/0/index. The roles are
+ *  fixed in scripts/keys.sh: 0 deployer, 9 operator, 3 creator, 5 maker, 6/7 takers. */
+export function roleAccount(index: number) {
+  return mnemonicToAccount(process.env.MNEMONIC?.trim() || ANVIL_MNEMONIC, { addressIndex: index })
+}
 
 /** Public anvil dev keys #0..#9. */
 export const ANVIL_KEYS: Hex[] = [
@@ -190,13 +199,28 @@ export function setup(rpc: string, api: string, deployPath: string) {
 
   /** Gas (dev faucet, else anvil_setBalance) and, for an ERC20 quote, `quoteAmount` minted (the faucet's mint, plus a
    *  direct mint for the rest: FLAP_USDT's mint is public). */
+  /** Gas below this on a real network (no faucet, no anvil cheats): warn, the owner tops it up by hand. */
+  const LOW_GAS = parseEther('0.005')
+  let gasWarned = false
+
+  /** Make `acct` able to trade `quoteAmount` more. Fork: the dev faucet (or anvil_setBalance) for gas. Real
+   *  network: gas is yours to send (warned once when low). ERC20 quote: whatever is still missing is minted
+   *  from Flap's faucet USDT, whose `mint` is public, on any network. */
   async function fund(acct: LocalAccount, quoteAmount: bigint) {
     let fromFaucet = 0n
     try {
       const r = await post<{ quote?: string }>('/api/faucet', { address: acct.address })
       fromFaucet = BigInt(r.quote ?? '0')
     } catch {
-      await pc.request({ method: 'anvil_setBalance' as never, params: [acct.address, '0x' + parseEther('1000').toString(16)] as never })
+      try {
+        await pc.request({ method: 'anvil_setBalance' as never, params: [acct.address, '0x' + parseEther('1000').toString(16)] as never })
+      } catch {
+        const gas = await pc.getBalance({ address: acct.address })
+        if (gas < LOW_GAS && !gasWarned) {
+          gasWarned = true
+          console.log(`seed: ${acct.address} has ${Number(gas) / 1e18} BNB for gas: send tBNB (see scripts/wallets.sh)`)
+        }
+      }
     }
     if (!native && quoteAmount > fromFaucet) await send(acct, { address: quote, abi: mintAbi, functionName: 'mint', args: [acct.address, quoteAmount - fromFaucet] })
   }
@@ -238,6 +262,8 @@ export function setup(rpc: string, api: string, deployPath: string) {
   }
 
   /** Keep a bot trading: when its free Exchange balance drops below `min`, refill the wallet and deposit `amount`. */
+  /** When `b` can spend less than `min`, add `amount`: USDT minted from Flap's faucet token (ERC20 quote), or
+   *  deposited (native). The live loop calls it every few ticks, so a bot never runs dry of quote. */
   async function topUp(b: Bot, min = 100n * E18, amount = 200n * E18) {
     const u = await get<{ free?: string; balance: string }>(`/api/user/${b.owner}`)
     if (BigInt(u.free ?? u.balance) >= min) return false
