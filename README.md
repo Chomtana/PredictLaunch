@@ -1,239 +1,203 @@
 # PredictLaunch
 
-A memecoin launchpad where each launch's liquidity is raised by a Polymarket-style "Up or Down"
-prediction market on an Atlas Oracle feed. The creator picks a feed, a **strike** (price to beat) and
-a **settlement time**. Traders buy Up or Down shares (1 Up + 1 Down are always backed by 1 unit of the quote token: native
-BNB, or on the testnet dev stack Flap's faucet USDT).
-At settlement, winners are paid 1 − cut per share, the cut fills the launch's pool, losers claim the
-memecoin, and graduation launches the token through Flap's Pool Launch Portal via our Launcher
-Factory, with a PancakeSwap pool. If the target isn't reached, winners are paid in full.
+**Launch memes on a prediction market. Losers get the meme, winners fund the initial pool.**
 
-The creator picks where the coin launches: **Flap** (default) or **Four.meme**, through our own OpenFour
-preset (see [Four.meme (OpenFour) rail](#fourmeme-openfour-rail)). Same mechanism on both: 1B supply,
-the raise and 500M seed a PancakeSwap pool, losers claim the other 500M.
+PredictLaunch is a memecoin launchpad on BNB Chain where a coin's starting liquidity is raised by an
+"Up or Down" (or YES / NO) prediction market. Instead of buying a bonding curve, people bet on a question.
+When the market settles, the winners give up a small cut of their payout to fund the coin's PancakeSwap pool,
+and the losers get the memecoin. Nobody leaves with nothing.
 
-- Interfaces: [SPEC.md](SPEC.md) (and each track's `SPEC-NOTES.md`)
-- Design: [docs/superpowers/specs/2026-11-25-predictlaunch-design.md](docs/superpowers/specs/2026-11-25-predictlaunch-design.md)
-- Plan: [docs/superpowers/plans/2026-11-25-predictlaunch.md](docs/superpowers/plans/2026-11-25-predictlaunch.md)
+> Setup, scripts, deployment and internals are in [DEVELOPER.md](DEVELOPER.md).
+> Interfaces are in [SPEC.md](SPEC.md).
+
+## Overview
+
+A creator opens a launch by choosing:
+
+- **The question.** Either a price question on an [Atlas Oracle](#coinmarketcap--atlas)
+  feed ("Will BTC be above $95,000 at 18:00?") or a real-world YES / NO question matched to a
+  [Cournot](#cournot-integration) market ("Will it rain in Boston on Nov 26, 2026?").
+- **The settlement time**, a **cut** (10–30%) and a **target** (at least 3,000 USDT).
+- **The coin**: name, symbol, logo, and where it launches: [Flap](#flap) (default) or
+  [Four.meme](#fourmeme-openfour) through our own OpenFour preset.
+
+Traders buy Up or Down shares on an order book. One Up plus one Down share is always backed by exactly 1 USDT
+held by the Exchange contract, so the market is fully collateralised. Matching runs off-chain for speed;
+fills settle on-chain in batches.
+
+At settlement:
+
+| | Target reached | Target missed |
+|---|---|---|
+| Winners | paid **1 − cut** per share | paid **1.00** per share |
+| The cut | seeds the PancakeSwap pool with 500M tokens | not taken |
+| Losers | share the other **500M tokens** | get nothing (it was a normal bet) |
+| The coin | launches (1B supply) | no coin |
+
+### Example: one launch, end to end
+
+Launch: **"BTC above $95,000 at 18:00?"**, coin **$MOON**, cut **20%**, target **3,000 USDT**, on Flap.
+
+1. **Trading.** Over the market's life, traders buy shares. Each matched pair locks 1 USDT in the Exchange.
+   By settlement, **20,000 pairs** exist: 20,000 USDT is locked.
+   - Alice buys 1,000 **Up** at 60¢ and pays **600 USDT**.
+   - Bob buys 1,000 **Down** at 40¢ and pays **400 USDT**.
+2. **Settlement.** At 18:00 the Exchange reads the BTC/USD Atlas feed on-chain: BTC is at $95,800. **Up wins.**
+3. **The raise.** Cut × pairs = 20% × 20,000 = **4,000 USDT**. That is above the 3,000 USDT target, so the
+   launch graduates.
+4. **Winners are paid.** Every Up share redeems for 0.80 USDT. Alice gets **800 USDT** (+200).
+5. **The coin launches.** Our Launcher Factory creates $MOON through Flap's Pool Launch Portal (1B supply,
+   `…7777` address). **4,000 USDT + 500M $MOON** seed a PancakeSwap pool, so the opening price is
+   4,000 / 500M = 0.000008 USDT.
+6. **Losers get the meme.** Down holders share the other 500M $MOON pro rata. Bob holds 1,000 of 20,000 Down
+   shares, so he claims **25M $MOON**, worth about **200 USDT** at the opening price. He lost the bet, but he
+   holds the coin from its first block, and so do all the other losers.
 
 ```
-contracts/   Foundry: Exchange, Flap Launcher Factory + Launcher (rail), OpenFour preset + FourRail (src/openfour/)
-core/        Rust lib: types, EIP-712, book/matcher, state mirror, batcher
-sequencer/   Rust service: matching, batches, keeper, HTTP/WS API
-frontend/    React/Vite UI + scripts/ (feed relay, seed bots, e2e driver)
-scripts/     dev.sh (one-command fork demo), e2e.sh (end-to-end smoke)
+          20,000 USDT locked (20,000 Up + 20,000 Down shares)
+                               │
+                  settle on Atlas BTC/USD: Up wins
+                               │
+           ┌───────────────────┴───────────────────┐
+   80% → Up holders                    20% cut = 4,000 USDT ≥ target
+   16,000 USDT (0.80 per share)                   │
+                                   Flap Portal → $MOON, 1B supply
+                                       ┌──────────┴──────────┐
+                     PancakeSwap pool: 4,000 USDT      500M $MOON → Down holders,
+                     + 500M $MOON (LP)                 pro rata to their shares
 ```
 
-## Setup
+Had the pairs been only 10,000 (raise 2,000 USDT, under target), Up holders would get 1.00 each, Down holders
+nothing, and no coin would launch.
 
-Requirements: Foundry (`anvil`, `forge`, `cast`), Rust (cargo), Node ≥ 22 with pnpm, `jq`, `curl`.
+## Contract Deployment Address
+
+BSC testnet (chain ID 97). Collateral is Flap's testnet USDT
+(`0x190C989D5665a0e404B444b53CAE9AbCfb600157`); every coin graduates into a PancakeSwap pool.
+
+| Contract | Address (BSC testnet) |
+|---|---|
+| Exchange (market, collateral, settlement, redeem, loser claims) | [`0x79DfD161308769c39Aec5cA6feb0AB6673B0EcBb`](https://testnet.bscscan.com/address/0x79dfd161308769c39aec5ca6feb0ab6673b0ecbb) |
+| PredictLaunchLauncherFactory (Flap) | [`0xDfAd3914190926cf1321788F81e89DC7f3D65b87`](https://testnet.bscscan.com/address/0xdfad3914190926cf1321788f81e89dc7f3d65b87) |
+| FourRail (Four.meme / OpenFour) | [`0xfa58f1Fb6087464A9404a178baE0E721A15C3Ffe`](https://testnet.bscscan.com/address/0xfa58f1fb6087464a9404a178bae0e721a15c3ffe) |
+
+The full list, with Sourcify-verified source, is in [deployments/bsc-testnet.json](deployments/bsc-testnet.json).
+
+The stack: Solidity contracts (Foundry), a Rust sequencer (order matching, EIP-712 signed orders, batched
+on-chain settlement, a keeper that settles, redeems and graduates launches), and a React frontend.
+
+## Flap
+
+Flap is the default launch venue, and it goes through a **Launcher Factory**, as the track requires.
+
+- [`PredictLaunchLauncherFactory`](contracts/src/flap/PredictLaunchLauncherFactory.sol) is our Launcher
+  Factory, enabled on the testnet Flap Portal. Each launch gets its own `PredictLaunchLauncher` (beacon proxy),
+  created through `Portal.newLauncher`, which locks the `…7777` vanity salt when the market opens.
+- **What is distinctive:** the raise is not a bonding curve. It comes from the winners' cut of a prediction
+  market. At graduation the Launcher hands the raise to the Portal, which creates the token and its
+  PancakeSwap pool. The Launcher then sends the other 500M tokens to the Exchange, where the losers claim them.
+- **The full flow runs on BSC testnet:** create a launch (Launcher) → trade → settle → graduate (token +
+  pool) → losers claim. `scripts/e2e.sh` checks the whole path against the real Flap Portal: the token ends in
+  `7777`, a token/USDT PancakeSwap pair holds the raise, losers receive tokens, and winners receive
+  (1 − cut) per share.
+- **Custom launch UI:** the create page (price or question, cut, target, coin name/logo) and the launch page
+  (chart, order book, progress to target, graduation and claim panels) in [frontend/](frontend/).
+- The 3,000 USDT minimum target matches Flap's graduation threshold, so every PredictLaunch coin shows as
+  graduated on Flap.
+
+## Four.meme (OpenFour)
+
+The creator can pick **Four.meme** as the venue instead of Flap. Following the
+[OpenFour developer guide](https://github.com/four-meme-community/openfour-docs/blob/main/docs/developer-guide.md),
+we deploy our own OpenFour instance and register a new **PredictLaunch preset**. This is a new launch mechanism
+(the OpenFour Hub route): the token sale is bought in one shot by the prediction market's raise.
+
+| Slot | Module | What it does |
+|---|---|---|
+| curve | `FairLaunchCurveModule` | fixed price `raise / 500M` |
+| trade | `PredictLaunchTradeModule` (new) | only our rail may buy; no sells |
+| migrate | `FairLaunchMigrateModule` | at sell-out: raise + 500M tokens into a PancakeSwap V2 pair, LP burned |
+| validator | `PredictLaunchPresetValidator` (new) | pins 1B supply, 500M sale, raise = sale × price, buyer = rail |
+
+At graduation [`FourRail`](contracts/src/openfour/FourRail.sol) calls `Core.createToken` on the preset, then
+`Core.buy` for the whole 500M sale with the raise. The sale sells out, so Core migrates to PancakeSwap in the
+same transaction, and the other 500M go to the Exchange for the losers. Same economics as Flap, so the creator
+can pick either venue. Module addresses are in [deployments/bsc-testnet.json](deployments/bsc-testnet.json).
+
+## CoinMarketCap × Atlas
+
+Atlas is the oracle for every price launch, on-chain and off-chain.
+
+- **On-chain settlement.** At the settlement time anyone (in practice our keeper) calls
+  `Exchange.snapshot(id)`, which reads the launch's Atlas feed on-chain and fixes the outcome (Up if price ≥
+  strike). We use Atlas's open-read BSC testnet feeds:
+
+  | Feed | Atlas address (BSC testnet) |
+  |---|---|
+  | BNB/USD | `0x3957d289ee9c38272377786787ea34f9dd29788d` |
+  | BTC/USD | `0x83b2f2c20df36f166cf5b3f017204cbb7babcad0` |
+  | ETH/USD | `0x35369decd8c662954b3d24acc2a862c708a34fd2` |
+
+  Chainlink adds a second source for BTCB, CAKE and USDT launches. Every snapshot emits `SnapshotSource`
+  naming the feed it read, so every settlement is auditable on-chain.
+- **Live charts.** The sequencer polls the Atlas off-chain API, which is backed by CoinMarketCap data
+  (`POST https://api.atlasoracle.io/oracle/user/v1/oracle-feed/search`), and streams it to the launch page
+  chart, so traders watch the same price source the market settles on.
+- **Safety:** markets are fully collateralised (1 USDT per pair), settlement reads the oracle on-chain, and a
+  settlement grace window guarantees every market closes: without a price in that window, every share
+  redeems at 0.50.
+
+## Cournot Integration
+
+Cournot powers the second kind of launch: **question launches** on real-world events (weather, the Fed,
+sports, Starship, AI releases).
+
+**Where and how we call Cournot.** The Rust sequencer has a Cournot client,
+[sequencer/src/cournot.rs](sequencer/src/cournot.rs), that calls the Intelligence Oracle at
+`https://interface.cournot.ai/intelligence/v1/`:
+
+- `resolve`: matches the creator's question to live Cournot markets. Called when the creator clicks **Find
+  markets** on the create page (`POST /api/cournot/resolve`), and every 60 s for each open question launch to
+  track the market's YES price.
+- `probability`: the Intelligence Oracle's probability for the claim and market. Called once when a question
+  launch opens, and at settlement whenever a fresh reading is needed. Authenticated with the `COURNOT-API-KEY` header
+  (kept server-side, never logged).
+
+**How the probability drives decisions.**
+
+1. **Opening price.** The market maker quotes around the Cournot probability (for example 88% → YES at 88¢),
+   so a question launch opens at a fair price instead of 50/50.
+2. **Settlement.** After the settlement time the resolver takes the last Cournot YES price, or a fresh
+   probability: ≥ 0.97 proposes YES, ≤ 0.03 proposes NO. It writes the evidence to
+   `settle-<id>.json` and calls `Exchange.proposeOutcome(id, outcome, keccak256(evidence))` on-chain. The
+   outcome becomes final after a challenge window. A 7-day deadline guarantees every question launch
+   closes: without a decision by then, every share redeems at 0.50.
+
+**Where users see the claim and evidence.** On a question launch page, the **Resolved by Cournot** panel
+shows the exact question sent to Cournot and the Cournot market that settles it. The settlement panel shows
+the proposed outcome, the challenge countdown and the evidence hash. Each launch's full record (exact claim,
+matched market, probability, Cournot's `result` and `basis`, fetch time) is served at
+`GET /api/launch/:id/oracle` and stored in `oracle/launch-<id>.json`, and its evidence hash is on-chain.
+
+**Proof of a live call.** `resolve` is free and needs no key, so anyone can reproduce it:
 
 ```bash
-cp .env.example .env        # set BSC_TESTNET_RPC_URL: your own BSC testnet node or a provider key
-cd contracts && forge soldeer install && cd ..
-cd frontend && pnpm install && cd ..
+curl -s -X POST https://interface.cournot.ai/intelligence/v1/resolve \
+  -H 'content-type: application/json' \
+  -d '{"message":"Will it rain in Boston tomorrow?","limit":2}'
 ```
 
-`.env` is gitignored and read by `scripts/dev.sh`, `scripts/e2e.sh` and Foundry. The scripts never print
-the URL (logs are scrubbed). A public rate-limited endpoint is usually too slow for the fork: use a
-provider key.
+On 2026-11-26 this returned `{"code":0,"msg":"Success", ...}` with the market *"Will it rain in Boston on
+Nov 26, 2026?"* (id `28994967`, ends `2026-11-27T05:00:00Z`). The seed bots make this same live call to open
+their question launches: launch 33 on BSC testnet, *"Will it rain in Boston on Nov 26, 2026?"*, is linked
+to this market.
 
-## Local demo: `scripts/dev.sh`
+## Try it
 
 ```bash
-scripts/dev.sh                 # everything, including the frontend at http://localhost:5173
-scripts/dev.sh --no-live       # seed once, no live market-maker loop
-scripts/dev.sh --no-seed       # no seeded launches/bots
-scripts/dev.sh --no-frontend   # no Vite (API work, e2e)
-scripts/dev.sh --no-four       # Flap only: skip our OpenFour instance (saves ~5 min)
+cp .env.example .env    # set BSC_TESTNET_RPC_URL
+scripts/dev.sh          # local BSC-testnet fork: contracts, sequencer, bots, UI at http://localhost:5173
+scripts/testnet.sh      # the same against real BSC testnet
 ```
 
-It runs, in order: `anvil --fork-url $BSC_TESTNET_RPC_URL --chain-id 97 --block-time 1` →
-`forge script Deploy` (owner anvil #0, operator anvil #9; enables the factory on the Flap Portal
-through Flap's testnet whitelist helper, exactly as on real testnet) → `contracts/script/fork-setup.sh`
-(fork only: authorizes the Exchange on every Atlas feed with `anvil_setStorageAt`) → the feed
-relay (copies live testnet prices into the fork every 2 s) → the sequencer (`--dev-faucet`) → the
-seed bots (each round: 2-3 BTC/BNB/ETH price launches with random meme names, coin-icon logos,
-near-the-money strikes, 10-30 min, random cut and target; plus 1-2 Cournot question launches on live
-real-world markets such as city rain, the Fed or Starship, with a matching photo, all on Flap; and,
-when Four is deployed, one more price launch and one more question launch on Four.meme; catalog in
-`frontend/src/lib/catalog.ts`, images in `frontend/public/seed/`; a maker and two takers trade
-around a Black-Scholes-style fair price, or the Cournot probability) → Vite. When every seeded
-launch has settled, the bots create a new round. Logs are in `.dev/*.log`; Ctrl-C stops everything.
-
-**Quote token.** By default the Exchange's collateral is Flap's testnet faucet USDT
-(`0x190C989D5665a0e404B444b53CAE9AbCfb600157`, on-chain symbol "USD", 18 decimals). Its `mint` is
-public, so bots, the dev faucet and anyone on live testnet can mint it
-([abc.flap.sh/faucet](https://abc.flap.sh/faucet?lang=en)); only gas and the 0.005 BNB salt-lock fee
-need tBNB. The Portal creates a pool from 1,500 USDT, but Flap only shows a token as graduated from
-a ~3,000 USDT raise (half of it is the pool's share), so `minTarget` is 3,000 (4.3 BNB native), the seed
-bots' targets are 1-1.5x `minTarget`, and every other demo amount is x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUOTE_TOKEN` and
-`MIN_TARGET` env on `Deploy.s.sol`).
-
-### Real BSC testnet (no fork)
-
-**One seed phrase for everything.** Put a BIP-39 `MNEMONIC` in `.env`. Every account comes from it
-(`scripts/keys.sh`): index 0 deployer/owner, 9 operator (batches, keeper, resolver, OpenFour `Core.signer`),
-3 seed creator, 5 market maker, 6/7 takers. Left empty, it is anvil's public test mnemonic, so the fork keeps
-using anvil #0..#9; `dev.sh` with your own mnemonic gives those accounts fork BNB.
-
-```bash
-scripts/wallets.sh             # addresses, needs, balances; tops up every account from the deployer
-scripts/wallets.sh --check     # list only, send nothing
-scripts/wallets.sh --rpc http://127.0.0.1:8545   # the same on the dev fork
-scripts/testnet.sh             # all of it: wallet check, deploy once (Flap + our OpenFour), sequencer, bots, frontend
-scripts/testnet.sh --no-four   # Flap only; also --no-seed, --no-frontend, --redeploy
-scripts/testnet.sh --verify    # retry contract verification (Sourcify, or BscScan with a paid key)
-```
-
-**Fund only the deployer.** `wallets.sh` adds up what the other accounts are missing; when the deployer
-holds that plus what it keeps for itself (0.1 tBNB, or just the gas still needed to deploy when `testnet.sh`
-calls it), it sends each account its shortfall from the deployer; otherwise it prints the one amount to send
-to the deployer. USDT needs nothing: the bots mint Flap's faucet USDT (public `mint`) whenever
-they run low (every few ticks, and right away after an `insufficient_balance` rejection). On a real network
-they only warn when an account's gas runs low.
-
-**Verification.** `testnet.sh` verifies every contract it deployed right after the deploy: Exchange, the Flap
-factory and the beacon + Launcher implementation its constructor creates, FourRail, the preset validator and
-the three OpenFour modules (`scripts/verify.sh`, from the broadcasts saved in `deployments/bsc-testnet/`;
-constructor arguments are read back from the chain). It uses BscScan when `ETHERSCAN_API_KEY` is on a plan that
-covers BNB Chain; Etherscan's free plan does not ("Free API access is not supported for this chain"), so it
-then falls back to [Sourcify](https://sourcify.dev) (free, no key; source at
-`https://repo.sourcify.dev/97/<address>`, linked from `deployments/bsc-testnet.json`). It runs once per
-deployment; `scripts/verify.sh` (or `scripts/testnet.sh --verify`) retries. OpenFour's own Core / Registry proxies come from their fork-deploy and are not ours to verify.
-
-**The deployment is tracked.** After it deploys, `testnet.sh` writes the public addresses to
-[`deployments/bsc-testnet.json`](deployments/) (summary with BscScan links) and `deployments/bsc-testnet/`
-(the files later runs reuse). Commit them; any clone then runs against the same deployment. Keys never leave
-`.env`. `testnet.sh` refuses to run with the public anvil mnemonic.
-
-The manual steps below do the same by hand.
-
-`Deploy.s.sol` uses no cheats, so it deploys to the real testnet as is. It enables the factory on
-the Flap Portal by calling `whitelist(factory)` on Flap's testnet helper
-`0x77779969a11eff7582f3bCf48135A846A3457777` (anyone may call it; it exists on testnet only), then
-reads `Portal.launcherFactoryMultiplier(factory)` back and fails unless it is `(true, 10000)`. By default it
-enables only the feeds with a Chainlink fallback (BTCB, BNB, BTC, ETH, CAKE, USDT), because the Exchange can't read the
-others until Atlas authorizes it (BNB, BTC and ETH are open-read Atlas feeds and settle on Atlas directly) (see Known limitations). The deployer needs about 0.012 tBNB.
-
-```bash
-set -a; . ./.env; set +a
-START_BLOCK=$(cast block-number --rpc-url "$BSC_TESTNET_RPC_URL")
-cd contracts
-OPERATOR=<operator address> QUOTE_TOKEN=0x190C989D5665a0e404B444b53CAE9AbCfb600157 \
-DEPLOY_JSON=../.dev/testnet-deploy.json \
-forge script script/Deploy.s.sol:Deploy --rpc-url "$BSC_TESTNET_RPC_URL" --broadcast \
-  --legacy --with-gas-price 1gwei --private-key <deployer key>      # or --account / --ledger
-# check (should print: true, 10000)
-cast call --rpc-url "$BSC_TESTNET_RPC_URL" 0x000042108465206185A077Edc3F3fd2b49060000 \
-  'launcherFactoryMultiplier(address)(bool,uint16)' $(jq -r .factory ../.dev/testnet-deploy.json)
-```
-
-Leave out `--broadcast` to simulate against live testnet state first. Optional env:
-`FACTORY_MULTIPLIER_BPS` (0..10000, default 10000), and `ALL_FEEDS=true` once Atlas has authorized the
-Exchange. The helper can't disable a factory, but anyone can overwrite its multiplier, so re-check it
-before testing if the multiplier matters. Then run the sequencer against the live RPC, **without**
-`--dev-faucet` (it uses `anvil_setBalance`) and without the feed relay or seed bots (both fork only).
-The operator key needs tBNB for batch gas:
-`target/debug/predictlaunch-sequencer --rpc "$BSC_TESTNET_RPC_URL" --exchange <exchange> --factory <factory> --operator-key <operator key> --start-block "$START_BLOCK" --quote-symbol USDT --oracle-dir .dev/oracle-testnet`.
-
-### MetaMask
-
-Add a **custom network**: name "PredictLaunch fork", RPC `http://127.0.0.1:8545`, chain ID `97`,
-symbol BNB. It has the same chain ID as the real BSC testnet: keep it a separate network, never mix
-the two, and never send real testnet funds to the dev keys. Import an anvil dev key (PUBLIC keys,
-fork only), for example #0 `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` or
-#1 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d`. The faucet button in the
-app gives any address 1000 fork BNB for gas and 10,000 USDT (`POST /api/faucet`, dev only).
-
-### Dev wallet
-
-Instead of MetaMask, pick a dev wallet in the connect dialog (shown only when the RPC is local):
-Alice #0, Bob #1, Carol #2 or Erin #4. It signs with that public anvil key in the browser, no
-extension needed. The seed bots use #3 (creator), #5 (maker), #6 and #7 (takers); #9 is the
-operator. Local fork only.
-
-## Four.meme (OpenFour) rail
-
-OpenFour is Four.meme's modular launch engine. Following the
-[openfour-docs](https://github.com/four-meme-community/openfour-docs) developer guide, we fork-deploy our
-**own** OpenFour instance (Registry, Core, FeeRouter, Tools over the testnet implementations; we own it) and
-register a **PredictLaunch preset** on it:
-
-| Slot | Module | Notes |
-| --- | --- | --- |
-| token, vault | fork's `TOKEN_STANDARD`, `VAULT_BASIC` | reused |
-| curve | `FairLaunchCurveModule` (`module.curve.fair_launch`) | fixed price `raise / 500M`, sells off |
-| trade | `PredictLaunchTradeModule` (`module.trade.predict_launch`) | new: only the rail may buy, no sells |
-| migrate | `FairLaunchMigrateModule` (`module.migrate.fair_launch`) | at sell-out: raise + other 500M to an empty PCS V2 pair, LP burned |
-| validator | `PredictLaunchPresetValidator` | pins 1B supply, 500M sale, raise = sale × price, buyer = rail |
-
-`FourRail` (`contracts/src/openfour/FourRail.sol`) is both the factory and the graduation rail of Four
-launches. `FourRail.createLaunch(cfg)` registers the market on the Exchange (no salt, no fee; the token
-doesn't exist yet). At graduation the keeper signs the rail's `createDigest` with the operator key (our
-fork's `Core.signer`) and calls `FourRail.graduate(id, validTimestamp, sig)`, which runs
-`Exchange.graduate`: `Core.createToken` on the preset, `Core.buy` of the whole 500M sale with the raise
-(sold out, so Core migrates to PancakeSwap in the same call), and the 500M goes to the Exchange for the
-losers. On our fork the preset has zero protocol/dev fees, so the pool gets the whole raise (minus
-`raise / 500M` rounding dust, sent to the creator).
-
-`scripts/openfour-fork.sh <rpc> <deployer key> <signer> <exchange>` does the whole setup (openfour-docs
-`fork-deploy` at a pinned commit, then `forge script DeployFour`) and writes `.dev/four.json`; `dev.sh`
-runs it unless `--no-four`. On real testnet the same script works (deployer needs tBNB and must own the
-Exchange), then pass `--four-rail <rail>` to the sequencer. Fork tests:
-`OPENFOUR_RPC=<rpc with the fork deployed> OPENFOUR_JSON=../.dev/openfour/fork-deployment.json forge test --mc FourForkTest --threads 1`.
-
-Limitation: the create signature covers the raise, so it can only be made at graduation, by a key that is
-`Core.signer`. That is fine on our own OpenFour instance; on the official Four.meme deployment the signer is
-Four.meme's create API, which this path does not use.
-
-## End-to-end smoke: `scripts/e2e.sh`
-
-```bash
-scripts/e2e.sh                 # ~13 min, real time; prints "E2E OK"
-```
-
-It starts `dev.sh --no-frontend --no-seed`, then `frontend/scripts/e2e.ts` creates a BTCB launch
-settling 10 min out (cut 10%, target 2,150 USDT), two bots mint 25,000 USDT of pairs, and it waits for the
-keeper to snapshot, resolve, redeem and graduate through the real Flap Portal. It asserts the token
-ends in `7777`, a token/USDT PancakeSwap pair holds the raise, the loser claims > 0 tokens, the winner's balance rose by
-(1 − cut) per winning share, and `/api/status.softReversals == 0`.
-
-## Tests
-
-```bash
-cd contracts && forge test           # fork tests skip when BSC_TESTNET_RPC_URL is unset
-cargo test --workspace
-cd frontend && pnpm vitest run
-```
-
-## Known limitations
-
-- **Atlas feeds only serve authorized contracts.** On live testnet the Atlas team must call
-  `setAuthorizedCallers([exchange], [true])` on each feed a launch uses. Until then `snapshot` falls
-  back to Chainlink for BTCB/USD, CAKE/USD and USDT/USD (BNB/USD, BTC/USD and ETH/USD are open-read, so they need no authorization) (`setFallbackFeed`, set by the
-  deploy script; the price is scaled from 8 to 18 decimals and `SnapshotSource` names the source).
-  Launches on any other feed can't snapshot: the market goes Void after the grace window, everyone
-  redeems at 0.50 and the launch fails, so by default the deploy script doesn't enable those feeds
-  (`ALL_FEEDS=true` does). On the fork, `dev.sh` deploys with `ALL_FEEDS=true` and `fork-setup.sh`
-  authorizes the Exchange on Atlas, so Atlas is used.
-- **Chart vs settlement prices.** The chart streams the Atlas offchain API (CoinMarketCap-backed,
-  ~10 s updates; onchain feed fallback), while settlement always uses the onchain snapshot. On the
-  fork the onchain feeds are copied from live testnet every 2 s by the feed relay, so the two agree
-  closely but not to the wei.
-- **Flap factory gating.** On testnet, `Deploy.s.sol` enables the factory through Flap's public
-  whitelist helper (the testnet Portal does not currently enforce it anyway; see
-  `contracts/SPEC-NOTES.md`). The helper doesn't exist on mainnet, where Flap enables a factory only after
-  an audit, so the deploy script refuses to run there.
-- **The salt lock is taken at creation** (`Portal.newLauncher` charges `SALT_LOCK_FEE` and locks the
-  `…7777` salt) while the token launches at graduation, up to 30 days later. Tested with a 10-minute
-  gap; whether the Portal expires long-held locks was not checked.
-- The fork has chain ID 97, same as the real testnet; PancakeSwap/BscScan links in the UI only work
-  for live-testnet launches.
-- The fork's feed prices are as fresh as the relay (2 s polling of the live testnet).
-- Cold-fork stalls: the first graduation on a fresh fork fetches a lot of remote state and anvil
-  stalls for ~15–30 s, long enough for an in-flight batch to exceed `MAX_LAG` and revert (a soft
-  reversal). `seed.ts` and `e2e.ts` warm the path with a no-op `eth_call` right after creating
-  their first launch; a launch created first from the UI on a brand-new fork doesn't get that.
-- The fork RPC URL is passed to `anvil --fork-url`, so it is visible in the local process list
-  (`ps`); it is never written to logs.
+Full setup, scripts and tests: [DEVELOPER.md](DEVELOPER.md).
