@@ -9,14 +9,16 @@ const FILTERS: [string, (p: Phase) => boolean][] = [
   ['All', () => true],
   ['Live', (p) => p === 'live' || p === 'settling'],
   ['Graduated', (p) => p === 'graduated' || p === 'graduating'],
-  ['Failed', (p) => p === 'failed' || p === 'void'],
+  ['Failed', (p) => p === 'failed'],
 ]
 
 export function Home() {
   const { launches, config, configError } = useApp()
   const now = useNow(1000)
   const [filter, setFilter] = useState(0)
-  const sorted = (launches ?? [])
+  // Voided markets (no settlement price / Cournot VOID) are hidden; their page stays reachable by link.
+  const shown = (launches ?? []).filter((l) => phaseOf(l, now) !== 'void')
+  const sorted = shown
     .filter((l) => FILTERS[filter][1](phaseOf(l, now)))
     .sort((a, b) => {
       const pa = phaseOf(a, now) === 'live' ? 0 : 1
@@ -51,7 +53,7 @@ export function Home() {
             </button>
           ))}
         </div>
-        <span className="muted small">{launches ? `${launches.length} launch${launches.length === 1 ? '' : 'es'}` : ''}</span>
+        <span className="muted small">{launches ? `${shown.length} launch${shown.length === 1 ? '' : 'es'}` : ''}</span>
       </div>
 
       {!config ? (
