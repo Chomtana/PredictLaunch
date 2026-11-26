@@ -82,6 +82,7 @@ scripts/wallets.sh --check     # list only, send nothing
 scripts/wallets.sh --rpc http://127.0.0.1:8545   # the same on the dev fork
 scripts/testnet.sh             # all of it: wallet check, deploy once (Flap + our OpenFour), sequencer, bots, frontend
 scripts/testnet.sh --no-four   # Flap only; also --no-seed, --no-frontend, --redeploy
+scripts/testnet.sh --verify    # retry BscScan verification (needs ETHERSCAN_API_KEY)
 ```
 
 **Fund only the deployer.** `wallets.sh` adds up what the other accounts are missing; when the deployer
@@ -89,7 +90,19 @@ holds that plus what it keeps for itself (0.1 tBNB, or just the gas still needed
 calls it), it sends each account its shortfall from the deployer; otherwise it prints the one amount to send
 to the deployer. USDT needs nothing: the bots mint Flap's faucet USDT (public `mint`) whenever
 they run low (every few ticks, and right away after an `insufficient_balance` rejection). On a real network
-they only warn when an account's gas runs low. `testnet.sh` refuses to run with the public anvil mnemonic.
+they only warn when an account's gas runs low.
+
+**BscScan verification.** With `ETHERSCAN_API_KEY` (an etherscan.io key; Etherscan V2 covers BscScan
+testnet) in `.env`, `testnet.sh` verifies every contract it deployed right after the deploy: Exchange, the Flap
+factory and the beacon + Launcher implementation its constructor creates, FourRail, the preset validator and
+the three OpenFour modules (`scripts/verify.sh`, from the broadcasts saved in `.dev/testnet/`; constructor
+arguments are read back from the chain). It runs once per deployment; `scripts/testnet.sh --verify` retries.
+OpenFour's own Core / Registry proxies come from their fork-deploy and are not ours to verify.
+
+**The deployment is tracked.** After it deploys, `testnet.sh` writes the public addresses to
+[`deployments/bsc-testnet.json`](deployments/) (summary with BscScan links) and `deployments/bsc-testnet/`
+(the files later runs reuse). Commit them; any clone then runs against the same deployment. Keys never leave
+`.env`. `testnet.sh` refuses to run with the public anvil mnemonic.
 
 The manual steps below do the same by hand.
 
