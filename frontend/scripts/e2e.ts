@@ -7,7 +7,7 @@
 // (anvil #2) buys only Down, minting 25 pairs (≥ 22 BNB; 25,000 USDT) before
 // settlement. Then, with real time (no shortcuts), the keeper snapshots, resolves, redeems and
 // graduates. Asserts: token ends in 7777, a PancakeSwap pair exists, the loser claims > 0 tokens,
-// the winner's Exchange balance rose by exactly (1 − cut) per winning share, softReversals == 0.
+// the winner's balance (Exchange for native, wallet for an ERC20 quote) rose by exactly (1 − cut) per winning share, softReversals == 0.
 
 import { erc20Abi, parseAbi, parseEther, zeroAddress, type Address } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -35,7 +35,8 @@ function check(cond: unknown, msg: string): asserts cond {
   log(`ok: ${msg}`)
 }
 
-const bal = (u: Address) => S.pc.readContract({ address: S.deploy.exchange, abi: exchangeAbi, functionName: 'balanceOf', args: [u] })
+// Native quote: payouts land in the Exchange balance. ERC20 quote (approve-only): in the wallet.
+const bal = (u: Address) => S.tradable(u)
 const pos = (id: bigint, u: Address) => S.pc.readContract({ address: S.deploy.exchange, abi: exchangeAbi, functionName: 'position', args: [id, u] })
 
 async function idle() {

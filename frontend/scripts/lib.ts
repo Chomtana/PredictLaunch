@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, decodeEventLog, encodeAbiParameters, encodeFunctionData, http, keccak256, parseAbi, parseEther, toHex, type Address, type Hex, type LocalAccount } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { chainFor, deposit as depositTx, encodeLaunchConfig, exchangeAbi, isNative, NATIVE, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
+import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, isNative, NATIVE, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
 
@@ -184,16 +184,32 @@ export function setup(rpc: string, api: string, deployPath: string) {
     if (rc.status !== 'success') throw new Error(`deposit reverted (${hash})`)
   }
 
-  /** Fund, deposit into the Exchange, authorize a trading key. */
+  /** Wallet quote balance + internal Exchange balance: everything a bot can trade with. */
+  async function tradable(who: Address) {
+    const internal = await pc.readContract({ address: deploy.exchange, abi: exchangeAbi, functionName: 'balanceOf', args: [who] })
+    if (native) return internal
+    return internal + (await pc.readContract({ address: quote, abi: erc20Abi, functionName: 'balanceOf', args: [who] }))
+  }
+
+  /** Fund and authorize a trading key. Native quote: deposit into the Exchange. ERC20 quote: approve-only
+   *  (one unlimited approve; batches pull straight from the wallet). */
   async function makeBot(acct: LocalAccount, depositAmount: bigint): Promise<Bot> {
-    const have = await pc.readContract({ address: deploy.exchange, abi: exchangeAbi, functionName: 'balanceOf', args: [acct.address] })
-    await fund(acct, depositAmount > have ? depositAmount - have : 0n)
-    if (have < depositAmount) await depositQuote(acct, depositAmount - have)
-    await post('/api/poke')
+    if (native) {
+      const have = await pc.readContract({ address: deploy.exchange, abi: exchangeAbi, functionName: 'balanceOf', args: [acct.address] })
+      await fund(acct, depositAmount > have ? depositAmount - have : 0n)
+      if (have < depositAmount) await depositQuote(acct, depositAmount - have)
+    } else {
+      const have = await tradable(acct.address)
+      await fund(acct, depositAmount > have ? depositAmount - have : 0n)
+      await approveTrading(wallet(acct), pc, acct, deploy.exchange, quote)
+    }
     const key = privateKeyToAccount(generatePrivateKey())
     const a = { owner: acct.address, key: key.address, expiry: (await chainNow()) + 7n * 86400n, nonce: randomNonce() }
     const sig = await signAuthorizeKey(D, acct, a)
     await post('/api/msgs', [authorizeKeyMsg(a, sig)])
+    // The user view watches the address; the poke reads its funds now.
+    await get(`/api/user/${acct.address}`)
+    await post('/api/poke')
     return { owner: acct.address, acct, key, resting: new Map() }
   }
 
@@ -202,7 +218,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     const u = await get<{ free?: string; balance: string }>(`/api/user/${b.owner}`)
     if (BigInt(u.free ?? u.balance) >= min) return false
     await fund(b.acct, amount)
-    await depositQuote(b.acct, amount)
+    if (native) await depositQuote(b.acct, amount)
     await post('/api/poke')
     return true
   }
@@ -255,7 +271,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, fund, depositQuote, makeBot, topUp, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, place, cancelAll }
 }
 
 export interface Bot {
