@@ -43,7 +43,7 @@ alloy_sol_types::sol! {
     #[derive(Debug, PartialEq, Eq)]
     struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; }
     #[derive(Debug, PartialEq, Eq)]
-    struct Batch { uint64 ts; KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
+    struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
 
     #[derive(Debug, PartialEq, Eq)]
     struct LaunchConfig {

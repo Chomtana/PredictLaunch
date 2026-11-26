@@ -36,7 +36,7 @@ struct Args {
     port: u16,
     #[arg(long, env = "PREDICTLAUNCH_HOST", default_value = "127.0.0.1")]
     host: String,
-    /// Batch interval in milliseconds (capped at 8000 so batches stay within MAX_LAG).
+    /// Batch interval in milliseconds (capped at 8000).
     #[arg(long, env = "PREDICTLAUNCH_BATCH_MS", default_value_t = 2000)]
     batch_ms: u64,
     /// Chain poll + keeper interval in milliseconds.

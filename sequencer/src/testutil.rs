@@ -103,7 +103,7 @@ impl Chain for FakeChain {
         };
         self.push(ChainEvent::BatchSubmitted {
             batch_id: id,
-            ts: b.ts,
+            ts: now_secs(),
             fills: b.fills.len() as u64,
             batch: Some(b.clone()),
         });

@@ -100,7 +100,7 @@ fn traded_state(n_users: usize) -> (State, Vec<TestKey>) {
     s.apply_events(
         vec![ChainEvent::BatchSubmitted {
             batch_id: 1,
-            ts: b.ts,
+            ts: (now + 10_000) / 1000,
             fills: b.fills.len() as u64,
             batch: Some(b),
         }],

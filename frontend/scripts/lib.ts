@@ -180,8 +180,8 @@ export function setup(rpc: string, api: string, deployPath: string) {
   /**
    * Fork only: pull the whole graduation path (Flap Portal, token implementation, PancakeSwap) into
    * anvil's fork cache before trading starts. The first graduation on a cold fork fetches so much
-   * remote state that anvil stalls for ~30 s, long enough for an in-flight batch to exceed MAX_LAG
-   * (BadBatchTs -> soft reversal). This eth_calls rail.launch(id) as the Exchange (it reverts at the
+   * remote state that anvil stalls for ~30 s, long enough for an in-flight batch to time out
+   * (soft reversal). This eth_calls rail.launch(id) as the Exchange (it reverts at the
    * end, in receiveLoserTokens, after touching everything) and changes no state.
    */
   async function warmGraduation(rail: Address, id: bigint, value: bigint) {
@@ -265,7 +265,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
   }
 
   /**
-   * Give `b` a fresh trading key. Also the recovery path: a batch the chain refuses (e.g. BadBatchTs) takes the
+   * Give `b` a fresh trading key. Also the recovery path: a batch the chain refuses (e.g. Overfill) takes the
    * keys it was authorizing with it, after which every order signed by the old key is `bad_signature`.
    */
   async function authorize(b: Bot) {

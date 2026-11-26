@@ -30,6 +30,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     uint256 public constant FORCE_DELAY = 600;
+    /// @dev Wait after settleTime before an outcome can be proposed or resolved.
     uint256 public constant MAX_LAG = 15;
     /// @dev Gas forwarded on a push payout; a receiver that needs more gets `pendingPayout` instead.
     uint256 internal constant PUSH_GAS = 10_000;
@@ -139,7 +140,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     }
 
     struct Batch {
-        uint64 ts;
         KeyAuth[] keys;
         SignedOrder[] orders;
         Fill[] fills;
@@ -174,7 +174,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     WithdrawRequest[] internal _withdraws;
     uint64 public withdrawProcessed;
 
-    uint64 public lastBatchTs;
     uint64 public batchCount;
 
     mapping(address owner => mapping(address key => uint64)) public keyExpiry;
@@ -241,8 +240,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     event TokensClaimed(uint256 launchId, address user, uint256 amount);
     event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount);
     event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
-    /// @notice ERC20 quote: fill `index` of batch `batchId` was not applied because `user` could no longer pay
-    ///         (wallet balance or allowance moved after the sequencer matched it).
+    /// @notice Fill `index` of batch `batchId` was not applied: its market had closed when the batch landed
+    ///         (`user` = 0), or (ERC20 quote) `user` could no longer pay (wallet balance or allowance moved after
+    ///         the sequencer matched it).
     event FillSkipped(uint64 batchId, uint256 index, address user);
     event QuestionSet(uint256 launchId, string question, uint256 marketId);
     event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
@@ -260,7 +260,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     error TooEarly();
     error NothingToClaim();
     error TransferFailed();
-    error BadBatchTs();
     error BadSignature();
     error KeyNonceUsed();
     error NotOwner();
@@ -283,7 +282,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     error AlreadyResolved();
     error BadFill();
     error BadAmount();
-    error NotTradable();
     error BadCross();
     error Overfill();
     error InsufficientBalance();
@@ -649,7 +647,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit OutcomeProposed(id, outcome, evidenceHash, msg.sender, fin);
     }
 
-    /// @notice Settle the market, after settleTime + MAX_LAG (every batch stamped before settleTime has landed).
+    /// @notice Settle the market, after settleTime + MAX_LAG (no fill lands at or after settleTime).
     ///         Price launch: once snapped or the snapshot window has closed (Void if not snapped). Question launch:
     ///         once the outcome is final (owner override), or a proposal has waited `challengeWindow`, or (Void) no
     ///         proposal came by settleTime + QUESTION_DEADLINE.
@@ -828,12 +826,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     /// @notice Permissionless: anyone may submit a batch. Every rule a batch could break is checked here
-    ///         (signatures, prices, amounts, funds, the timestamp window), so a submitter only picks which
-    ///         valid fills land. The sequencer matches the orders it is sent; another submitter racing it can
-    ///         make the sequencer's batch revert (Overfill, BadBatchTs), and the sequencer drops those fills.
+    ///         (signatures, prices, amounts, funds), all at `block.timestamp`, so a submitter only picks which
+    ///         valid fills land and in what order. The sequencer matches the orders it is sent; another submitter
+    ///         racing it can make the sequencer's batch revert (Overfill), and the sequencer drops those fills.
+    ///         A fill whose market closed before the batch landed is skipped (`FillSkipped`), not reverted.
     function submitBatch(Batch calldata b) external nonReentrant {
-        if (b.ts < lastBatchTs || b.ts > block.timestamp || block.timestamp - b.ts > MAX_LAG) revert BadBatchTs();
-        lastBatchTs = b.ts;
+        uint64 ts = uint64(block.timestamp);
         uint64 id = ++batchCount;
 
         for (uint256 i; i < b.keys.length; ++i) {
@@ -843,12 +841,12 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint256 n = b.orders.length;
         bytes32[] memory hashes = new bytes32[](n);
         for (uint256 i; i < n; ++i) {
-            hashes[i] = _checkOrder(b.orders[i].order, b.orders[i].sig, b.ts);
+            hashes[i] = _checkOrder(b.orders[i].order, b.orders[i].sig, ts);
         }
         for (uint256 i; i < b.fills.length; ++i) {
             Fill calldata f = b.fills[i];
             if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
-            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, b.ts, i);
+            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, ts, i);
         }
 
         uint64 to = b.withdrawTo;
@@ -858,7 +856,7 @@ contract Exchange is Ownable, ReentrancyGuard {
             if (!w.done) _processWithdraw(i, w);
         }
         if (to > withdrawProcessed) withdrawProcessed = to;
-        emit BatchSubmitted(id, b.ts, b.fills.length);
+        emit BatchSubmitted(id, ts, b.fills.length);
     }
 
     /// @dev One fill at the maker's price. Transfer: shares one way, quote the other. Mint: both buy opposite
@@ -877,7 +875,10 @@ contract Exchange is Ownable, ReentrancyGuard {
         if (amt == 0 || amt % SHARE_UNIT != 0) revert BadAmount();
         if (t.launchId != m.launchId) revert BadFill();
         uint256 id = t.launchId;
-        if (!isTradable(id, ts)) revert NotTradable();
+        if (!isTradable(id, ts)) {
+            emit FillSkipped(batchCount, idx, address(0));
+            return;
+        }
 
         uint8 pm = m.price;
         // exact: amt is a multiple of 1e16

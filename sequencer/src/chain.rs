@@ -450,8 +450,8 @@ impl RpcChain {
             .wallet(EthereumWallet::from(signer.clone()))
             .connect_http(rpc_url.parse().context("bad rpc url")?)
             .erased();
-        // alloy polls a remote RPC for receipts every 7 s by default, which ages every batch ~10 s
-        // toward MAX_LAG (15 s) before it confirms. BSC testnet makes a block every ~0.75 s.
+        // alloy polls a remote RPC for receipts every 7 s by default, which delays every batch ~10 s
+        // before it confirms (and a fill landing after its settleTime is skipped). BSC testnet makes a block every ~0.75 s.
         provider.client().set_poll_interval(RECEIPT_POLL);
         Ok(Self {
             provider,
@@ -553,13 +553,13 @@ impl RpcChain {
             .with_input(call.abi_encode())
             .with_gas_price(GAS_PRICE);
         // Nothing here reads the `pending` block: some BSC testnet RPCs stamp it ~12 s in the future
-        // (failing MAX_LAG / timing checks the mined tx passes) and report a pending nonce ahead of
+        // (failing timing checks the mined tx passes) and report a pending nonce ahead of
         // the chain (txs behind a nonce gap that never mine). So nonce and gas come from `latest`,
         // set explicitly so alloy's fillers (which use `pending`) leave them alone.
         let _g = self.send_lock.lock().await;
         // The estimate doubles as the simulation: a revert comes back as an error, not a failed
         // receipt. Both reads at once: each RPC round trip is ~1 s on some testnet endpoints, and a
-        // batch must land within MAX_LAG (15 s) of its timestamp.
+        // fill that lands after its market's settleTime is skipped.
         let (gas, nonce) = tokio::join!(
             self.provider
                 .estimate_gas(tx.clone())

@@ -278,7 +278,6 @@ contract FlapForkTest is Test {
         _fund(bob, 10 ether * k);
         uint64 exp = uint64(block.timestamp + 1 days);
         Exchange.Batch memory b;
-        b.ts = uint64(block.timestamp);
         b.orders = new Exchange.SignedOrder[](2);
         b.orders[0] = _signed(Eip712.Order(bob, 0, 0, 1, 0, 50, amt, exp, 1), BOB_PK); // taker: Buy Down
         b.orders[1] = _signed(Eip712.Order(alice, 0, 0, 0, 0, 50, amt, exp, 1), ALICE_PK); // maker: Buy Up
@@ -316,10 +315,13 @@ contract FlapForkTest is Test {
         assertEq(PredictLaunchLauncher(launcher).token(), token);
         assertEq(_quoteBal(address(ex)), exBal - 2.4 ether * k);
         assertEq(IERC20(token).balanceOf(address(ex)), 500_000_000e18, "Exchange holds the losers' 500M");
-        address pair = IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, _quote() == address(0) ? WBNB : _quote());
+        address pair =
+            IPairFactoryLike(IRouterLike(ROUTER).factory()).getPair(token, _quote() == address(0) ? WBNB : _quote());
         assertTrue(pair != address(0), "PancakeSwap pair exists");
         assertEq(IERC20(token).balanceOf(pair), 500_000_000e18, "pool holds 500M");
-        if (_quote() != address(0)) assertEq(IERC20(_quote()).balanceOf(pair), 2.4 ether * k, "pool holds the USDT raise");
+        if (_quote() != address(0)) {
+            assertEq(IERC20(_quote()).balanceOf(pair), 2.4 ether * k, "pool holds the USDT raise");
+        }
 
         // redeem: Alice (Up) gets 8 * 0.70, Bob's 8 Down make him the only loser -> he claims all 500M
         address[] memory us = new address[](2);

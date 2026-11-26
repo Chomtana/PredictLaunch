@@ -43,7 +43,6 @@ contract BatchTest is Base {
         assertEq(ex.filled(mh), 1e18);
         assertEq(ex.filled(th), 1e18);
         assertEq(ex.projectedRaised(lid), 0.1 ether);
-        assertEq(ex.lastBatchTs(), vm.getBlockTimestamp());
     }
 
     function test_transferFill() public {
@@ -109,44 +108,26 @@ contract BatchTest is Base {
         );
     }
 
-    function test_fillAtOrAfterSettleReverts() public {
-        vm.warp(st + 5);
+    /// Checked at block.timestamp: a fill landing at or after settleTime is skipped, the rest of the batch lands.
+    function test_fillAtOrAfterSettleSkipped() public {
         Exchange.Batch memory b =
-            _batch(st, _orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
-        vm.prank(operator);
-        vm.expectRevert(Exchange.NotTradable.selector);
-        ex.submitBatch(b);
-        b.ts = st - 1;
+            _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        vm.warp(st - 1);
         _submit(b);
         assertEq(ex.getLaunch(lid).pairs, 1e18);
-    }
-
-    function test_batchTsBounds() public {
-        uint64 t = uint64(vm.getBlockTimestamp());
-        Exchange.Batch memory b = _emptyBatch(t + 1, 0);
-        vm.startPrank(operator);
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        vm.warp(t + 16);
-        b.ts = t;
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        b.ts = t + 1;
-        ex.submitBatch(b);
-        b.ts = t;
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        b.ts = t + 1; // equal to lastBatchTs is fine
-        ex.submitBatch(b);
-        vm.stopPrank();
+        b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        vm.warp(st);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(2, 0, address(0));
+        _submit(b);
         assertEq(ex.batchCount(), 2);
+        assertEq(ex.getLaunch(lid).pairs, 1e18);
+        assertEq(ex.filled(ex.orderHash(b.orders[0].order)), 0);
     }
 
     function test_rejectsBadOrders() public {
         // order amount not a multiple of 1e16
-        _expectFillRevert(
-            _o(bob, 1, 0, 50, 1e16 + 1), _o(alice, 0, 0, 50, 1e18), 1, 1e16, Exchange.BadOrder.selector
-        );
+        _expectFillRevert(_o(bob, 1, 0, 50, 1e16 + 1), _o(alice, 0, 0, 50, 1e18), 1, 1e16, Exchange.BadOrder.selector);
         // fill amount not a multiple of 1e16, or zero
         _expectFillRevert(_o(bob, 1, 0, 50, 1e18), _o(alice, 0, 0, 50, 1e18), 1, 1e16 + 1, Exchange.BadAmount.selector);
         _expectFillRevert(_o(bob, 1, 0, 50, 1e18), _o(alice, 0, 0, 50, 1e18), 1, 0, Exchange.BadAmount.selector);
@@ -168,14 +149,14 @@ contract BatchTest is Base {
         ex.authorizeKey(vm.addr(keyPk), uint64(vm.getBlockTimestamp() + 10));
         Eip712.Order memory kb = _o(bob, 1, 0, 50, 1e18);
         Exchange.Batch memory b =
-            _batch(uint64(vm.getBlockTimestamp()), _orders2(_sign(kb, keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
-        vm.warp(vm.getBlockTimestamp() + 11);
-        b.ts = uint64(vm.getBlockTimestamp());
+            _batch(_orders2(_sign(kb, keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        uint256 t0 = vm.getBlockTimestamp();
+        vm.warp(t0 + 11);
         vm.prank(operator);
         vm.expectRevert(Exchange.BadSignature.selector);
         ex.submitBatch(b);
         // ...which works while the key is live
-        b.ts = b.ts - 1; // key expiry == ts is still valid
+        vm.warp(t0 + 10); // key expiry == block.timestamp is still valid
         _submit(b);
 
         // overfill: two fills summing above order.amount
@@ -186,7 +167,7 @@ contract BatchTest is Base {
         Exchange.Fill[] memory fs = new Exchange.Fill[](2);
         fs[0] = Exchange.Fill(1, 0, 1, 0.6e18);
         fs[1] = Exchange.Fill(2, 0, 1, 0.5e18);
-        b = _batch(uint64(vm.getBlockTimestamp()), os, fs);
+        b = _batch(os, fs);
         vm.prank(operator);
         vm.expectRevert(Exchange.Overfill.selector);
         ex.submitBatch(b);
@@ -203,7 +184,7 @@ contract BatchTest is Base {
         ex.cancelOrder(c);
         _expectFillRevert(_o(bob, 1, 0, 50, 1e18), c, 1, 1e18, Exchange.OrderDead.selector);
         // a self-referencing fill
-        b = _batch(uint64(vm.getBlockTimestamp()), _orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 0, 1, 1e18));
+        b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 0, 1, 1e18));
         vm.prank(operator);
         vm.expectRevert(Exchange.BadFill.selector);
         ex.submitBatch(b);
@@ -214,7 +195,7 @@ contract BatchTest is Base {
         _depositFrom(address(0xD00D), 3 ether);
         vm.prank(address(0xD00D));
         uint64 idx = ex.requestWithdraw(5 ether);
-        Exchange.Batch memory b = _emptyBatch(uint64(vm.getBlockTimestamp()), idx + 1);
+        Exchange.Batch memory b = _emptyBatch(idx + 1);
         vm.expectEmit(address(ex));
         emit Exchange.WithdrawPaid(idx, address(0xD00D), 5 ether, 3 ether);
         _submit(b);
@@ -222,7 +203,7 @@ contract BatchTest is Base {
         assertEq(ex.balanceOf(address(0xD00D)), 0);
         assertEq(ex.withdrawProcessed(), idx + 1);
         // beyond the queue reverts
-        b = _emptyBatch(uint64(vm.getBlockTimestamp()), idx + 2);
+        b = _emptyBatch(idx + 2);
         vm.prank(operator);
         vm.expectRevert(Exchange.BadIndex.selector);
         ex.submitBatch(b);
@@ -235,10 +216,10 @@ contract BatchTest is Base {
 
     function test_anyoneCanSubmit() public {
         vm.prank(alice);
-        ex.submitBatch(_emptyBatch(uint64(vm.getBlockTimestamp()), 0));
+        ex.submitBatch(_emptyBatch(0));
         assertEq(ex.batchCount(), 1);
         vm.prank(bob);
-        ex.submitBatch(_emptyBatch(uint64(vm.getBlockTimestamp()), 0));
+        ex.submitBatch(_emptyBatch(0));
         assertEq(ex.batchCount(), 2);
     }
 
@@ -249,14 +230,14 @@ contract BatchTest is Base {
             abi.encodePacked(
                 "\x19\x01",
                 ex.DOMAIN_SEPARATOR(),
-                keccak256(abi.encode(Eip712.AUTHORIZE_KEY_TYPEHASH, bob, key, uint64(vm.getBlockTimestamp() + 100), uint64(1)))
+                keccak256(
+                    abi.encode(Eip712.AUTHORIZE_KEY_TYPEHASH, bob, key, uint64(vm.getBlockTimestamp() + 100), uint64(1))
+                )
             )
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(BOB_PK, h);
         Exchange.Batch memory b = _batch(
-            uint64(vm.getBlockTimestamp()),
-            _orders2(_sign(_o(bob, 1, 0, 50, 1e18), keyPk), _s(_o(alice, 0, 0, 50, 1e18))),
-            _fills1(0, 1, 1, 1e18)
+            _orders2(_sign(_o(bob, 1, 0, 50, 1e18), keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18)
         );
         b.keys = new Exchange.KeyAuth[](1);
         b.keys[0] = Exchange.KeyAuth(bob, key, uint64(vm.getBlockTimestamp() + 100), 1, abi.encodePacked(r, s, v));
@@ -275,7 +256,7 @@ contract BatchTest is Base {
         ex.requestWithdraw(4 ether);
         vm.prank(bob);
         ex.requestWithdraw(100 ether);
-        _submit(_emptyBatch(uint64(vm.getBlockTimestamp()), 2));
+        _submit(_emptyBatch(2));
         uint256 sumBal = ex.balanceOf(alice) + ex.balanceOf(bob) + ex.balanceOf(carol);
         uint256 sumPending = ex.pendingPayout(alice) + ex.pendingPayout(bob) + ex.pendingPayout(carol);
         assertEq(address(ex).balance, sumBal + sumPending + ex.getLaunch(lid).pairs);

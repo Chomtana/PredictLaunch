@@ -1,9 +1,10 @@
 //! Pending batches (open → sealed → sent) and their ABI form.
 //!
-//! Rules (Review Focus 1): a batch's `ts` is the time of its first message; a fill joins the open
-//! batch only if `batch.ts < settleTime` of its launch; the open batch is sealed when the batch
-//! timer fires (`batch_ms`, capped at `MAX_OPEN_MS` so `block.timestamp − ts ≤ MAX_LAG` holds),
-//! at any settleTime of a launch it holds fills for, or when it reaches `MAX_BATCH_FILLS`.
+//! Rules (Review Focus 1): a batch's `ts` is the time of its first message (sequencer-side only; the
+//! contract checks everything at `block.timestamp`); a fill joins the open batch only if
+//! `batch.ts < settleTime` of its launch; the open batch is sealed when the batch timer fires
+//! (`batch_ms`, capped at `MAX_OPEN_MS`), at any settleTime of a launch it holds fills for, or when it
+//! reaches `MAX_BATCH_FILLS`. A fill that lands after its settleTime is skipped on chain (`FillSkipped`).
 
 use std::collections::HashMap;
 
@@ -110,7 +111,6 @@ pub fn to_abi<'a>(
         })
         .collect();
     abi::Batch {
-        ts: b.ts,
         keys: b
             .keys
             .iter()

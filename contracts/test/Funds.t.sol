@@ -81,7 +81,7 @@ contract FundsTest is Base {
         // a later batch skips it (no second payment)
         _deposit(alice, 1 ether);
         vm.prank(operator);
-        ex.submitBatch(_emptyBatch(uint64(block.timestamp), 1));
+        ex.submitBatch(_emptyBatch(1));
         assertEq(ex.withdrawProcessed(), 1);
         assertEq(ex.balanceOf(alice), 1 ether);
     }
@@ -108,7 +108,7 @@ contract FundsTest is Base {
         r.dep();
         uint64 idx = r.req(2 ether);
         vm.prank(operator);
-        ex.submitBatch(_emptyBatch(uint64(block.timestamp), idx + 1));
+        ex.submitBatch(_emptyBatch(idx + 1));
         assertEq(ex.balanceOf(address(r)), 0);
         assertEq(ex.pendingPayout(address(r)), 2 ether);
         assertEq(address(ex).balance, 2 ether);

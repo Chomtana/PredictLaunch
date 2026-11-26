@@ -109,12 +109,11 @@ abstract contract Base is Test {
         fs[0] = Exchange.Fill(taker, maker, kind, amount);
     }
 
-    function _batch(uint64 ts, Exchange.SignedOrder[] memory os, Exchange.Fill[] memory fs)
+    function _batch(Exchange.SignedOrder[] memory os, Exchange.Fill[] memory fs)
         internal
         view
         returns (Exchange.Batch memory b)
     {
-        b.ts = ts;
         b.orders = os;
         b.fills = fs;
         b.withdrawTo = ex.withdrawProcessed();
@@ -125,9 +124,9 @@ abstract contract Base is Test {
         ex.submitBatch(b);
     }
 
-    /// One fill between two orders (index 0 taker, 1 maker), stamped now.
+    /// One fill between two orders (index 0 taker, 1 maker).
     function _fill(Eip712.Order memory taker, Eip712.Order memory maker, uint8 kind, uint128 amount) internal {
-        _submit(_batch(uint64(vm.getBlockTimestamp()), _orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount)));
+        _submit(_batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount)));
     }
 
     function _expectFillRevert(
@@ -137,8 +136,7 @@ abstract contract Base is Test {
         uint128 amount,
         bytes4 sel
     ) internal {
-        Exchange.Batch memory b =
-            _batch(uint64(vm.getBlockTimestamp()), _orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
+        Exchange.Batch memory b = _batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
         vm.prank(operator);
         vm.expectRevert(sel);
         ex.submitBatch(b);
@@ -158,8 +156,7 @@ abstract contract Base is Test {
         vm.warp(t);
     }
 
-    function _emptyBatch(uint64 ts, uint64 withdrawTo) internal pure returns (Exchange.Batch memory b) {
-        b.ts = ts;
+    function _emptyBatch(uint64 withdrawTo) internal pure returns (Exchange.Batch memory b) {
         b.withdrawTo = withdrawTo;
     }
 }

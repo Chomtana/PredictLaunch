@@ -225,7 +225,11 @@ contract QuestionTest is Base {
 
         vm.warp(_st(id));
         assertFalse(ex.isTradable(id, uint64(vm.getBlockTimestamp())));
-        _expectFillRevert(_o(carol, 0, 0, 55, 1e18), _o(alice, 0, 1, 55, 1e18), 0, 1e18, Exchange.NotTradable.selector);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(ex.batchCount() + 1, 0, address(0));
+        _fill(_o(carol, 0, 0, 55, 1e18), _o(alice, 0, 1, 55, 1e18), 0, 1e18);
+        (up,) = ex.position(id, carol);
+        assertEq(up, 2e18);
     }
 
     // ---- proposeOutcome / overrideOutcome access ----

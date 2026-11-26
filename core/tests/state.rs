@@ -217,7 +217,7 @@ fn soft_confirm_matches_contract_rules() {
                     w.s.apply_events(
                         vec![ChainEvent::BatchSubmitted {
                             batch_id: id,
-                            ts: b.ts,
+                            ts: now,
                             fills: b.fills.len() as u64,
                             batch: Some(b),
                         }],
@@ -362,7 +362,7 @@ fn withdraw_cancels_newest_first() {
         vec![
             ChainEvent::BatchSubmitted {
                 batch_id: 1,
-                ts: b.ts,
+                ts: T0 + 1,
                 fills: 0,
                 batch: Some(b),
             },
@@ -397,12 +397,10 @@ fn cuts_batch_at_settle_time() {
     // At launch 0's settleTime the open batch is cut with both fills, stamped before settle.
     let b1 = w.s.cut(s).expect("cut at settle");
     assert_eq!(b1.fills.len(), 2);
-    assert_eq!(b1.ts, SETTLE_A - 2);
-    assert!(b1.ts < SETTLE_A);
     w.s.apply_events(
         vec![ChainEvent::BatchSubmitted {
             batch_id: 1,
-            ts: b1.ts,
+            ts: SETTLE_A - 1,
             fills: 2,
             batch: Some(b1),
         }],
@@ -417,9 +415,7 @@ fn cuts_batch_at_settle_time() {
     at(&mut w, &bob, 1, Down, 40, s + 5000);
     at(&mut w, &alice, 1, Up, 60, s + 6000);
     let b2 = w.s.cut(s + 8000).expect("timer cut");
-    assert_eq!(b2.ts, SETTLE_A + 6);
     assert_eq!(b2.fills.len(), 1);
-    assert!(b2.ts < SETTLE_B);
 }
 
 #[test]
@@ -435,7 +431,6 @@ fn no_fill_at_or_after_settle() {
     w.place(&alice, 0, Up, Buy, 60, E18, SETTLE_A - 1).unwrap();
     let b = w.s.cut(ms(SETTLE_A)).unwrap();
     assert_eq!(b.fills.len(), 1);
-    assert!(b.ts < SETTLE_A);
     // Round must be 0.
     let (mut o, _) = w.order(&alice, 1, Up, Buy, 60, E18);
     o.round = 1;
@@ -547,7 +542,7 @@ fn fill_skipped_onchain_is_not_settled() {
             },
             ChainEvent::BatchSubmitted {
                 batch_id: 1,
-                ts: b.ts,
+                ts: T0 + 3,
                 fills: 2,
                 batch: Some(b),
             },
@@ -592,8 +587,8 @@ fn funds_snapshot_overrides_balance_and_enforces_locks() {
     assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
 }
 
-/// Permissionless `submitBatch`: a third party lands the same match first (a copy of our batch with
-/// its own ts), so ours reverts. The fill counts once, from the third party's batch.
+/// Permissionless `submitBatch`: a third party lands a different fill of the same two orders first,
+/// so ours reverts (Overfill). Only the third party's fill counts.
 #[test]
 fn foreign_batch_frontruns_ours() {
     let mut w = W::new(2000);
@@ -602,24 +597,47 @@ fn foreign_batch_frontruns_ours() {
     w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
     let ours = w.s.cut(ms(T0 + 3)).unwrap();
     let mut theirs = ours.clone();
-    theirs.ts = ours.ts + 1;
+    theirs.fills[0].amount = E18 / 2;
     w.s.apply_events(
         vec![ChainEvent::BatchSubmitted {
             batch_id: 1,
-            ts: theirs.ts,
+            ts: T0 + 4,
             fills: 1,
             batch: Some(theirs),
         }],
         ms(T0 + 4),
     );
-    // Ours reverts on chain (BadBatchTs / Overfill).
     w.s.on_batch_failed(ms(T0 + 5));
     assert_eq!(w.s.pending_fills(), 0);
-    assert_eq!(w.s.confirmed.pairs(0), E18);
-    assert_eq!(w.s.ledger.pairs(0), E18, "not double counted");
-    assert_eq!(w.s.confirmed.shares(0, alice.address(), Up), E18);
-    assert_eq!(w.s.confirmed.shares(0, bob.address(), Down), E18);
+    assert_eq!(w.s.confirmed.pairs(0), E18 / 2);
+    assert_eq!(w.s.ledger.pairs(0), E18 / 2, "our fill is gone");
+    assert_eq!(w.s.confirmed.shares(0, alice.address(), Up), E18 / 2);
+    assert_eq!(w.s.confirmed.shares(0, bob.address(), Down), E18 / 2);
     assert_eq!(w.s.trades.len(), 1);
-    assert!(w.s.books[&0].is_empty(), "both orders are filled, nothing rests");
+    check_invariants(&w);
+}
+
+/// An exact copy of our in-flight batch landing first is recognised as ours.
+#[test]
+fn identical_foreign_batch_counts_as_ours() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    let ours = w.s.cut(ms(T0 + 3)).unwrap();
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: T0 + 4,
+            fills: 1,
+            batch: Some(ours),
+        }],
+        ms(T0 + 4),
+    );
+    // Our own copy then reverts (Overfill); nothing is in flight any more, so nothing changes.
+    w.s.on_batch_failed(ms(T0 + 5));
+    assert_eq!(w.s.confirmed.pairs(0), E18);
+    assert_eq!(w.s.ledger.pairs(0), E18);
+    assert_eq!(w.s.trades.len(), 1);
     check_invariants(&w);
 }

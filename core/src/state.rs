@@ -1020,10 +1020,8 @@ impl State {
                 let ours = self.batches.front().and_then(|b| b.sent.clone());
                 match (batch, ours) {
                     (Some(eb), Some(sb)) if eb == sb => self.settle_front(&skips),
-                    (None, Some(sb)) if sb.ts == ts && sb.fills.len() as u64 == fills => {
-                        self.settle_front(&skips)
-                    }
-                    (Some(eb), _) => self.apply_foreign_batch(&eb, &skips),
+                    (None, Some(sb)) if sb.fills.len() as u64 == fills => self.settle_front(&skips),
+                    (Some(eb), _) => self.apply_foreign_batch(&eb, ts, &skips),
                     (None, _) => {}
                 }
             }
@@ -1067,8 +1065,9 @@ impl State {
         }
     }
 
-    /// A batch we did not send ourselves (e.g. replayed after a restart).
-    fn apply_foreign_batch(&mut self, b: &abi::Batch, skips: &HashSet<u64>) {
+    /// A batch we did not send ourselves: replayed after a restart, or submitted by anyone else
+    /// (`submitBatch` is permissionless). `ts` is its block time.
+    fn apply_foreign_batch(&mut self, b: &abi::Batch, ts: u64, skips: &HashSet<u64>) {
         for k in &b.keys {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
         }
@@ -1113,7 +1112,7 @@ impl State {
                 .confirmed
                 .apply_fill(t, *th, m, *mh, kind, f.amount, false);
             self.next_fill_id += 1;
-            self.push_trade(self.next_fill_id, t, m, kind, f.amount, b.ts);
+            self.push_trade(self.next_fill_id, t, m, kind, f.amount, ts);
         }
     }
 

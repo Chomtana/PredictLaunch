@@ -125,7 +125,7 @@ function claimTokens(uint256 launchId) external;                     // Graduate
 struct SignedOrder { Order order; bytes sig; }
 struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
 struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; } // kind 0 Transfer 1 Mint 2 Merge; indexes into orders
-struct Batch { uint64 ts; KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
+struct Batch { KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
 function submitBatch(Batch calldata b) external;                     // permissionless
 
 // views
@@ -193,10 +193,13 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   either way a failure goes to `pendingPayout`. The rail must call
   `receiveLoserTokens` for exactly `LOSER_SUPPLY` before returning, or `graduate` reverts.
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
-- Batch: `lastBatchTs ≤ ts ≤ block.timestamp`, `block.timestamp − ts ≤ MAX_LAG`; apply keys, then
-  fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid `min(requested,
-  balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any failed check
-  reverts the whole batch, except an unfunded payer (below).
+- Batch (permissionless: anyone may submit one, e.g. users trading among themselves while the
+  sequencer is down): every check runs at `block.timestamp` (order and key expiry, tradability);
+  apply keys, then fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid
+  `min(requested, balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any
+  failed check reverts the whole batch, except a fill whose market has closed (skipped,
+  `FillSkipped(batchId, index, 0)`) and an unfunded payer (below). A submitter racing the
+  sequencer can make its batch revert (e.g. `Overfill`); the sequencer drops those fills.
 - Approve-only trading (ERC20 quote only; native mode keeps internal balances): a payer's cost is
   taken from `balanceOf` first and the rest pulled from the wallet with `transferFrom` (the user
   approves the Exchange once; no deposit needed). Every credit (Transfer seller, Merge, `redeem`) is
