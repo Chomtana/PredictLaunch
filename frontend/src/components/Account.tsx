@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { shortAddr } from '../lib/format.ts'
-import { fmtBnb, parseBnb, usd } from '../lib/units.ts'
+import { fmtBnb, parseBnb, usd, fmtAmt } from '../lib/units.ts'
 import { isNative } from '../lib/chain.ts'
 import { DEV_ACCOUNTS } from '../lib/wallet.ts'
 import { useApp } from '../state.tsx'
@@ -107,15 +107,15 @@ function Connected() {
         <>
           <div className="bal-card">
             <div className="muted small">Available</div>
-            <div className="bal-big mono">{available != null ? fmtBnb(available, 4) : '…'} {q}</div>
+            <div className="bal-big mono">{available != null ? fmtAmt(available, 4) : '…'} {q}</div>
             <div className="muted small">
-              {available != null && usd(available, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
+              {available != null && usd(available, quoteUsd)} {locked > 0n && <>· {fmtAmt(locked, 4)} in open orders</>}
             </div>
           </div>
           {exchangeBalance != null && exchangeBalance > 0n && (
             <div className="key-row">
               <span className="small">
-                {fmtBnb(exchangeBalance, 4)} {q} left on the exchange from earlier deposits
+                {fmtAmt(exchangeBalance, 4)} {q} left on the exchange from earlier deposits
               </span>
               <button className="btn sm ghost" disabled={busy} onClick={() => { setBusy(true); Promise.resolve(withdraw(exchangeBalance)).finally(() => setBusy(false)) }}>
                 Withdraw
@@ -127,11 +127,11 @@ function Connected() {
       <>
       <div className="bal-card">
         <div className="muted small">Trading balance</div>
-        <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} {q}</div>
+        <div className="bal-big mono">{bal != null ? fmtAmt(bal, 4) : '…'} {q}</div>
         <div className="muted small">
-          {bal != null && usd(bal, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
+          {bal != null && usd(bal, quoteUsd)} {locked > 0n && <>· {fmtAmt(locked, 4)} in open orders</>}
         </div>
-        <div className="muted small">Wallet: {walletBalance != null ? fmtBnb(walletBalance, 4) : '…'} {q}</div>
+        <div className="muted small">Wallet: {walletBalance != null ? fmtAmt(walletBalance, 4) : '…'} {q}</div>
       </div>
 
       <div className="seg full">
@@ -200,8 +200,8 @@ function Connected() {
                 <a key={String(p.launchId)} href={`#/launch/${p.launchId}`} className="mini-row">
                   <span>{l ? `$${l.symbol}` : `#${p.launchId}`}</span>
                   <span className="mono">
-                    {BigInt(p.up) > 0n && <span className="up">{fmtBnb(p.up, 2)} {U} </span>}
-                    {BigInt(p.down) > 0n && <span className="down">{fmtBnb(p.down, 2)} {D}</span>}
+                    {BigInt(p.up) > 0n && <span className="up">{fmtAmt(p.up, 2)} {U} </span>}
+                    {BigInt(p.down) > 0n && <span className="down">{fmtAmt(p.down, 2)} {D}</span>}
                   </span>
                 </a>
               )

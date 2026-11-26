@@ -1,5 +1,5 @@
 import { shortAddr } from '../lib/format.ts'
-import { fmtBnb, fmtPrice } from '../lib/units.ts'
+import { fmtPrice, fmtAmt } from '../lib/units.ts'
 import { useApp } from '../state.tsx'
 import { Logo } from './ui.tsx'
 
@@ -35,7 +35,7 @@ export function Header({ route }: { route: string }) {
         </a>
         {wallet ? (
           <button className="btn account-btn" onClick={() => setAccountOpen(true)}>
-            <span className="mono">{available != null ? fmtBnb(available, 3) : '…'} {quoteSymbol}</span>
+            <span className="mono">{available != null ? fmtAmt(available, 3) : '…'} {quoteSymbol}</span>
             <span className="addr">
               {tradingReady && <i className="dot ok" title="Trading enabled" />}
               {shortAddr(wallet.address)}

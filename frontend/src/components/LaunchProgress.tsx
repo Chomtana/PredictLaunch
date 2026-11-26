@@ -1,6 +1,6 @@
 import { big, n, poolOf, progressOf, type LaunchSummary, type UserLaunch } from '../lib/api.ts'
 import { compact } from '../lib/format.ts'
-import { fmtBnb, fmtShares, LOSER_SUPPLY, num18, usd } from '../lib/units.ts'
+import { fmtShares, LOSER_SUPPLY, num18, usd, fmtAmt } from '../lib/units.ts'
 import { ProgressBar } from './ui.tsx'
 import { useQuote } from '../state.tsx'
 import { labelsFor } from '../lib/labels.ts'
@@ -37,8 +37,8 @@ export function LaunchProgress({
     <div className="panel section">
       <h3>{active ? 'Projected pool' : 'Pool'}</h3>
       <div className="pool-big">
-        <span className="v mono">{fmtBnb(pool, 3)} {q}</span>
-        <span className="muted">of {fmtBnb(target, 2)} {q} target</span>
+        <span className="v mono">{fmtAmt(pool, 3)} {q}</span>
+        <span className="muted">of {fmtAmt(target, 2)} {q} target</span>
         <span className="muted small" style={{ marginLeft: 'auto' }}>
           {usd(pool, quoteUsd)}
         </span>

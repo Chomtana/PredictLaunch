@@ -1,4 +1,4 @@
-import { fmtBnb } from '../lib/units.ts'
+import { fmtAmt } from '../lib/units.ts'
 import { useQuote } from '../state.tsx'
 import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
@@ -23,7 +23,7 @@ export function FailedPanel({ isVoid, outcome, raised, target, labels = PRICE_LA
           </h2>
           <div>Target not reached: winners were paid in full.</div>
           <div className="muted small">
-            The pool would have been {fmtBnb(raised, 3)} of {fmtBnb(target, 2)} {q}. Without a launch nothing is held back: every winning share paid 1.00 {q}
+            The pool would have been {fmtAmt(raised, 3)} of {fmtAmt(target, 2)} {q}. Without a launch nothing is held back: every winning share paid 1.00 {q}
             out automatically.
           </div>
         </>

@@ -1,7 +1,7 @@
 import type { Hex } from 'viem'
 import { n, type OrderView, type Trade } from '../lib/api.ts'
 import { clock } from '../lib/format.ts'
-import { cost, fmtBnb, fmtShares, payout } from '../lib/units.ts'
+import { cost, fmtShares, payout, fmtAmt } from '../lib/units.ts'
 import { useQuote } from '../state.tsx'
 import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
@@ -53,8 +53,8 @@ export function Positions({
                   <b>{labels.names[o]}</b>
                 </td>
                 <td className="r mono">{fmtShares(a)}</td>
-                <td className="r mono">{p != null ? `${fmtBnb(cost(a, p), 3)} ${q}` : '—'}</td>
-                <td className="r mono up">{fmtBnb(payout(a, cutBps), 3)} {q}</td>
+                <td className="r mono">{p != null ? `${fmtAmt(cost(a, p), 3)} ${q}` : '—'}</td>
+                <td className="r mono up">{fmtAmt(payout(a, cutBps), 3)} {q}</td>
               </tr>
             ))}
           </tbody>

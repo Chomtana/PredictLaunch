@@ -49,7 +49,7 @@ describe('units', () => {
   })
 
   it('usd estimate from an 18-dec BNB/USD price', () => {
-    expect(usd(2n * E18, 600n * E18)).toBe('$1,200.00')
+    expect(usd(2n * E18, 600n * E18)).toBe('$1,200')
     expect(usd(E18, null)).toBe('')
   })
 })

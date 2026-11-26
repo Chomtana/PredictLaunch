@@ -66,9 +66,9 @@ describe('CreateLaunchForm', () => {
     render(<CreateLaunchForm config={usdt} priceOf={priceOf} quoteUsd={E18} connected onSubmit={vi.fn(async () => {})} />)
     expect(screen.getByLabelText('Target (USDT)')).toBeTruthy()
     expect((screen.getByLabelText(/Target/) as HTMLInputElement).value).toBe('1500')
-    expect(screen.getByText(/1,500\.00 · pool needed/)).toBeTruthy()
+    expect(screen.getByText(/\$1,500 · pool needed/)).toBeTruthy()
     fireEvent.change(screen.getByLabelText(/Target/), { target: { value: '1000' } })
-    expect(screen.getByText(/at least 1,500.00 USDT/)).toBeTruthy()
+    expect(screen.getByText(/at least 1,500 USDT/)).toBeTruthy()
     expect(screen.getByText(/backed by 1 USDT/)).toBeTruthy()
   })
 

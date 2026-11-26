@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Book, MsgResult } from '../lib/api.ts'
 import { bestPrice, levelsFor, walkBuy, walkSell } from '../lib/market.ts'
-import { cost, floorShares, fmtBnb, fmtShares, parseBnb, payout, type Outcome } from '../lib/units.ts'
+import { cost, floorShares, fmtShares, parseBnb, payout, type Outcome, fmtAmt } from '../lib/units.ts'
 import { useQuote, type OrderParams } from '../state.tsx'
 import { Spinner } from './ui.tsx'
 import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
@@ -182,7 +182,7 @@ export function TradePanel(p: TradePanelProps) {
                     <button key={label} className={`preset ${stakeWei === v ? 'on' : ''}`} onClick={() => setStake(label)}>
                       <span className="amt">{label} {q}</span>
                       <span className="win">
-                        win <b>{fmtBnb(payout(w.shares, p.cutBps), 2)} {q}</b>
+                        win <b>{fmtAmt(payout(w.shares, p.cutBps), 2)} {q}</b>
                       </span>
                     </button>
                   )
@@ -230,7 +230,7 @@ export function TradePanel(p: TradePanelProps) {
                   {fmtShares(amount)} shares
                 </div>
               </div>
-              <span className="big">{fmtBnb(win, 2)} {q}</span>
+              <span className="big">{fmtAmt(win, 2)} {q}</span>
             </div>
           ) : (
             <div className="to-win">
@@ -238,7 +238,7 @@ export function TradePanel(p: TradePanelProps) {
                 <div className="muted small">You receive</div>
                 <div className="muted small">{fmtShares(amount)} shares</div>
               </div>
-              <span className="big">{fmtBnb(receive, 4)} {q}</span>
+              <span className="big">{fmtAmt(receive, 4)} {q}</span>
             </div>
           )}
 
@@ -265,7 +265,7 @@ export function TradePanel(p: TradePanelProps) {
       <div className="tp-row">
         <span className="cut-badge">{p.cutBps / 100}% cut</span>
         <span className="muted small">
-          winners get {(10000 - p.cutBps) / 100}¢ · available {p.balance != null ? fmtBnb(p.balance, 2) : '—'} {q}
+          winners get {(10000 - p.cutBps) / 100}¢ · available {p.balance != null ? fmtAmt(p.balance, 2) : '—'} {q}
         </span>
       </div>
     </div>

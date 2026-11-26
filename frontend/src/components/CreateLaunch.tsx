@@ -3,7 +3,7 @@ import type { Address } from 'viem'
 import { api, cournotError, toUnixSec, type Config, type CournotMarket, type OracleRecord } from '../lib/api.ts'
 import { NATIVE, type LaunchConfig } from '../lib/chain.ts'
 import { asset, duration, settleLabel } from '../lib/format.ts'
-import { fmtBnb, fmtPrice, num18, parseBnb, usd } from '../lib/units.ts'
+import { fmtBnb, fmtPrice, num18, parseBnb, usd, fmtAmt } from '../lib/units.ts'
 import { PRICE_LABELS, QUESTION_LABELS } from '../lib/labels.ts'
 import { useApp } from '../state.tsx'
 import { CoinAvatar, Spinner } from './ui.tsx'
@@ -124,7 +124,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     if (!Number.isFinite(settleSec)) e.settle = 'Pick a date and time'
     else if (dur < config.minDuration) e.settle = `At least ${duration(config.minDuration)} from now`
     else if (dur > config.maxDuration) e.settle = `At most ${duration(config.maxDuration)} from now`
-    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtBnb(minTarget, 2)} ${q} (Flap's pool floor)`
+    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtAmt(minTarget, 2)} ${q} (Flap's pool floor)`
     return e
   }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q, isQ, questionText, pick])
   const valid = Object.keys(errors).length === 0
@@ -422,7 +422,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
           )}
         </button>
         <div className="muted small center">
-          Costs the Flap salt-lock fee ({fmtBnb(BigInt(config.saltLockFee), 3)} BNB) plus gas. The token address is mined to end in …7777.
+          Costs the Flap salt-lock fee ({fmtAmt(BigInt(config.saltLockFee), 3)} BNB) plus gas. The token address is mined to end in …7777.
         </div>
       </form>
 
@@ -456,11 +456,11 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
             </div>
             <div>
               <span className="muted">Graduates at</span>
-              <b>{targetWei ? fmtBnb(targetWei, 2) : '…'} {q}</b>
+              <b>{targetWei ? fmtAmt(targetWei, 2) : '…'} {q}</b>
             </div>
             <div>
               <span className="muted">Open pairs needed</span>
-              <b>{targetWei ? fmtBnb((targetWei * 10000n) / BigInt(cut), 0) : '…'}</b>
+              <b>{targetWei ? fmtAmt((targetWei * 10000n) / BigInt(cut), 0) : '…'}</b>
             </div>
           </div>
         </div>

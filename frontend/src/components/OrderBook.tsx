@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Book, Level } from '../lib/api.ts'
 import { mirror } from '../lib/market.ts'
-import { cost, fmtBnb, fmtShares } from '../lib/units.ts'
+import { cost, fmtShares, fmtAmt } from '../lib/units.ts'
 import { PRICE_LABELS, type OutcomeLabels } from '../lib/labels.ts'
 
 const DEPTH = 8
@@ -57,7 +57,7 @@ function Row({ l, kind, max }: { l: Level; kind: 'ask' | 'bid'; max: bigint }) {
       <div className="ob-bar" style={{ width: `${w}%` }} />
       <span className="p">{l.price}¢</span>
       <span>{fmtShares(a)}</span>
-      <span>{fmtBnb(cost(a, l.price), 3)}</span>
+      <span>{fmtAmt(cost(a, l.price), 3)}</span>
     </div>
   )
 }

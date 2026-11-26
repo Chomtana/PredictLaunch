@@ -28,7 +28,7 @@ export function Home() {
       <section className="hero">
         <div>
           <h1>
-            Launch a coin on a <span className="grad">prediction</span>.
+            Launch a meme on a <span className="grad">prediction</span>
           </h1>
           <p className="muted">
             Every launch is an Up/Down bet on a real price. Winners are paid, the cut fills the coin's pool, and if it hits the target at settlement the

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fmtBnb, fmtShares, num18, POOL_TOKENS } from '../lib/units.ts'
+import { fmtShares, num18, POOL_TOKENS, fmtAmt } from '../lib/units.ts'
 import { Spinner } from './ui.tsx'
 import { useQuote } from '../state.tsx'
 
@@ -34,7 +34,7 @@ export function GraduatedPanel({
           <Spinner size={18} /> Launching on Flap…
         </h2>
         <div className="muted">
-          The pool hit its target. ${symbol} is being minted through the Flap Portal: {fmtBnb(raised, 3)} {q} and 500M tokens seed the PancakeSwap pool.
+          The pool hit its target. ${symbol} is being minted through the Flap Portal: {fmtAmt(raised, 3)} {q} and 500M tokens seed the PancakeSwap pool.
         </div>
       </div>
     )
@@ -53,7 +53,7 @@ export function GraduatedPanel({
     <div className="panel state-panel graduated">
       <h2>🎓 ${symbol} graduated</h2>
       <div className="muted">
-        The prediction is over. {fmtBnb(raised, 3)} {q} from winners' cut and 500M ${symbol} now form the PancakeSwap pool. Losers share the other 500M.
+        The prediction is over. {fmtAmt(raised, 3)} {q} from winners' cut and 500M ${symbol} now form the PancakeSwap pool. Losers share the other 500M.
       </div>
       {token && (
         <div className="addr-row">
@@ -70,7 +70,7 @@ export function GraduatedPanel({
         </div>
         <div className="stat">
           <span className="k">Pool liquidity</span>
-          <span className="v mono">{fmtBnb(raised, 3)} {q}</span>
+          <span className="v mono">{fmtAmt(raised, 3)} {q}</span>
         </div>
         <div className="stat">
           <span className="k">Your loser shares</span>
@@ -85,11 +85,11 @@ export function GraduatedPanel({
         <div>
           <div className="muted small">Claimable</div>
           <div className="big mono">
-            {fmtBnb(amount, 0)} <span className="muted">${symbol}</span>
+            {fmtAmt(amount, 0)} <span className="muted">${symbol}</span>
           </div>
         </div>
         <button className="btn primary" disabled={amount === 0n} onClick={onClaim}>
-          Claim {fmtBnb(amount, 0)} {symbol}
+          Claim {fmtAmt(amount, 0)} {symbol}
         </button>
       </div>
       {token && (

@@ -61,6 +61,13 @@ export function fmtBnb(wei: bigint | string | null | undefined, dp = 4): string 
   return (neg ? '-' : '') + group(int) + frac
 }
 
+/** Display amount: whole units from 100 up ("143,819", "3,000"), else `dp` decimals. Never for inputs. */
+export function fmtAmt(wei: bigint | string | null | undefined, dp = 4): string {
+  if (wei == null || wei === '') return '—'
+  const v = BigInt(wei)
+  return fmtBnb(v, (v < 0n ? -v : v) >= 100n * 10n ** 18n ? 0 : dp)
+}
+
 /** Shares, shown with up to 2 dp. */
 export const fmtShares = (wei: bigint | string) => fmtBnb(wei, 2)
 
@@ -77,12 +84,14 @@ export function parseBnb(s: string): bigint | null {
 /** Plain number of an 18-dec value (for charts / USD only, never for money math). */
 export const num18 = (v: bigint | string) => Number(formatUnits(BigInt(v), 18))
 
+/** USD text: whole dollars from $100 up ("$1,200", "$87,215"), cents below, more digits under a cent. */
 export function fmtUsd(n: number, maxDp?: number): string {
-  const dp = maxDp ?? (n >= 1000 ? 2 : n >= 1 ? 2 : n >= 0.01 ? 4 : 6)
+  const a = Math.abs(n)
+  const dp = a >= 100 ? 0 : (maxDp ?? (a >= 1 ? 2 : a >= 0.01 ? 4 : 6))
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: Math.min(2, dp), maximumFractionDigits: dp })
 }
 
-/** "$1,200.00" from a BNB amount and an 18-dec BNB/USD price; '' when the price is unknown. */
+/** "$1,200" from a BNB amount and an 18-dec BNB/USD price; '' when the price is unknown. */
 export function usd(bnbWei: bigint, bnbUsd: bigint | null | undefined): string {
   if (bnbUsd == null || bnbUsd <= 0n) return ''
   return fmtUsd(num18((bnbWei * bnbUsd) / E18), 2)
@@ -92,5 +101,5 @@ export function usd(bnbWei: bigint, bnbUsd: bigint | null | undefined): string {
 export function fmtPrice(p: bigint | string | null | undefined): string {
   if (p == null) return '—'
   const v = num18(p)
-  return fmtUsd(v, v >= 1000 && Number.isInteger(v) ? 0 : undefined)
+  return fmtUsd(v)
 }

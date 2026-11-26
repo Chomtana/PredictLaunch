@@ -1,6 +1,6 @@
 import { big, LaunchStatus, n, OutcomeCode, poolOf, progressOf, type LaunchSummary } from '../lib/api.ts'
 import { asset, duration, settleLabel } from '../lib/format.ts'
-import { fmtBnb, fmtPrice, usd } from '../lib/units.ts'
+import { fmtPrice, usd, fmtAmt } from '../lib/units.ts'
 import { useApp, useQuote } from '../state.tsx'
 import { AssetBadge, CoinAvatar, ProgressBar } from './ui.tsx'
 import { labelsFor } from '../lib/labels.ts'
@@ -111,7 +111,7 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
       <div className="lc-progress">
         <div className="lc-progress-top">
           <span>
-            <b className="mono">{fmtBnb(pool, 3)}</b> <span className="muted">/ {fmtBnb(l.target, 2)} {q}</span>
+            <b className="mono">{fmtAmt(pool, 3)}</b> <span className="muted">/ {fmtAmt(l.target, 2)} {q}</span>
           </span>
           <span className="muted small">{usd(pool, quoteUsd)}</span>
         </div>
