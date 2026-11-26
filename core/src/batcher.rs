@@ -54,6 +54,8 @@ pub struct PendingBatch {
     pub fills: Vec<FillRec>,
     pub keys: Vec<KeyRec>,
     pub cancels: Vec<CancelRec>,
+    /// Resting orders published to the onchain book (`OrderPosted`); chosen when the batch is sent.
+    pub posts: Vec<B256>,
     pub withdraw_to: u64,
     /// Earliest settleTime among the launches it holds fills for.
     pub min_settle: u64,
@@ -70,6 +72,7 @@ impl PendingBatch {
             fills: Vec::new(),
             keys: Vec::new(),
             cancels: Vec::new(),
+            posts: Vec::new(),
             withdraw_to: 0,
             min_settle: u64::MAX,
             sealed: false,
@@ -123,6 +126,11 @@ pub fn to_abi<'a>(
             amount: f.amount,
         })
         .collect();
+    let posts = b
+        .posts
+        .iter()
+        .map(|h| index_of(h, &mut orders))
+        .collect();
     abi::Batch {
         keys: b
             .keys
@@ -136,6 +144,7 @@ pub fn to_abi<'a>(
             })
             .collect(),
         orders,
+        posts,
         fills,
         cancels: b
             .cancels

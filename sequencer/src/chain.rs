@@ -103,6 +103,13 @@ const EVENTS: &[EventDef] = &[
     EventDef { name: "KeyAuthorized", params: &["address", "address", "uint64"] },
     EventDef { name: "KeyRevoked", params: &["address", "address"] },
     EventDef { name: "OrderCancelled", params: &["address", "bytes32"] },
+    EventDef {
+        name: "OrderPosted",
+        params: &[
+            "bytes32", "address", "uint256", "uint64", "uint8", "uint8", "uint8", "uint128", "uint64",
+            "uint64", "bytes",
+        ],
+    },
     EventDef { name: "MinNonceBumped", params: &["address", "uint64"] },
     EventDef {
         name: "LaunchCreated",
@@ -276,6 +283,7 @@ pub fn decode_log(topics: &[B256], data: &[u8], block_ts: u64) -> Option<ChainEv
             owner: addr(&p[0]),
             order_hash: p[1].as_word().unwrap_or_default(),
         },
+        "OrderPosted" => E::OrderPosted { order_hash: p[0].as_word().unwrap_or_default() },
         "MinNonceBumped" => E::MinNonceBumped { owner: addr(&p[0]), min_nonce: u64v(&p[1]) },
         "LaunchCreated" => E::LaunchCreated {
             launch_id: u64v(&p[0]),

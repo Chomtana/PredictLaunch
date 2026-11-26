@@ -150,6 +150,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     struct Batch {
         KeyAuth[] keys;
         SignedOrder[] orders;
+        /// Indexes into `orders` of the limit orders resting after this batch, published as `OrderPosted` so the
+        /// book is public onchain (anyone can match it, e.g. while the sequencer is down).
+        uint16[] posts;
         Fill[] fills;
         SignedCancel[] cancels;
         uint64 withdrawTo;
@@ -223,6 +226,20 @@ contract Exchange is Ownable, ReentrancyGuard {
     event KeyAuthorized(address owner, address key, uint64 expiry);
     event KeyRevoked(address owner, address key);
     event OrderCancelled(address owner, bytes32 orderHash);
+    /// @notice A signed limit order published to the onchain book (flat: every field needed to fill it).
+    event OrderPosted(
+        bytes32 orderHash,
+        address owner,
+        uint256 launchId,
+        uint64 round,
+        uint8 outcome,
+        uint8 side,
+        uint8 price,
+        uint128 amount,
+        uint64 expiry,
+        uint64 nonce,
+        bytes sig
+    );
     event MinNonceBumped(address owner, uint64 minNonce);
     event LaunchCreated(
         uint256 launchId,
@@ -853,7 +870,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     ///         moved under (market closed, order filled elsewhere, cancelled, key revoked, payer short) is skipped
     ///         (`FillSkipped`), not reverted, so another submitter racing the sequencer cannot sink its batch;
     ///         only a malformed batch (the submitter's own mistake) reverts.
-    ///         Order: key authorizations, orders and fills, cancels, withdrawals.
+    ///         Order: key authorizations, orders and fills, posts, cancels, withdrawals.
     function submitBatch(Batch calldata b) external nonReentrant {
         uint64 ts = uint64(block.timestamp);
         uint64 id = ++batchCount;
@@ -871,6 +888,14 @@ contract Exchange is Ownable, ReentrancyGuard {
             Fill calldata f = b.fills[i];
             if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
             _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, ts, i);
+        }
+        // what rests after the fills goes on the public book (skipping orders dead or already full)
+        for (uint256 i; i < b.posts.length; ++i) {
+            uint256 p = b.posts[i];
+            if (p >= n) revert BadFill();
+            bytes32 h = hashes[p];
+            Eip712.Order calldata o = b.orders[p].order;
+            if (h != 0 && filled[h] < o.amount) _emitPosted(h, o, b.orders[p].sig);
         }
         // after the fills: a fill matched before the cancel still lands, nothing after it can
         for (uint256 i; i < b.cancels.length; ++i) {
@@ -935,6 +960,10 @@ contract Exchange is Ownable, ReentrancyGuard {
             _launches[id].pairs -= amt;
         }
         emit Trade(id, th, mh, kind, pm, amt);
+    }
+
+    function _emitPosted(bytes32 h, Eip712.Order calldata o, bytes calldata sig) internal {
+        emit OrderPosted(h, o.owner, o.launchId, o.round, o.outcome, o.side, o.price, o.amount, o.expiry, o.nonce, sig);
     }
 
     /// @dev Sentinel for "market closed" in `_skipFor` (reported as user 0).

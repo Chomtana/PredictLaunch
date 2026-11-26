@@ -132,6 +132,10 @@ pub enum ChainEvent {
         owner: Address,
         order_hash: B256,
     },
+    /// A resting order published to the onchain book.
+    OrderPosted {
+        order_hash: B256,
+    },
     MinNonceBumped {
         owner: Address,
         min_nonce: u64,
@@ -494,6 +498,8 @@ pub struct State {
     pub chain_keys: HashMap<(Address, Address), u64>,
     pub pending_keys: HashMap<(Address, Address), u64>,
     pub cancelled: HashSet<B256>,
+    /// Orders already on the onchain book (`OrderPosted`, or in a batch of ours that landed).
+    pub posted: HashSet<B256>,
     pub min_nonce: HashMap<Address, u64>,
     pub withdrawals: BTreeMap<u64, Withdrawal>,
     pub withdraw_processed: u64,
@@ -528,6 +534,7 @@ impl State {
             chain_keys: HashMap::new(),
             pending_keys: HashMap::new(),
             cancelled: HashSet::new(),
+            posted: HashSet::new(),
             min_nonce: HashMap::new(),
             withdrawals: BTreeMap::new(),
             withdraw_processed: 0,
@@ -845,6 +852,9 @@ impl State {
                     self.cancel_resting(&h);
                 }
             }
+            E::OrderPosted { order_hash } => {
+                self.posted.insert(order_hash);
+            }
             E::OrderCancelled { order_hash, .. } => {
                 self.cancelled.insert(order_hash);
                 self.cancel_resting(&order_hash);
@@ -1039,6 +1049,8 @@ impl State {
         let Some(b) = self.batches.pop_front() else {
             return;
         };
+        // Posted or not (dead / full by then), never repost them: no batch keeps re-sending an order.
+        self.posted.extend(b.posts.iter().copied());
         for k in &b.keys {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
             self.pending_keys.remove(&(k.owner, k.key));
@@ -1251,6 +1263,11 @@ impl State {
             self.batches.push_back(PendingBatch::new(now_ms));
             self.seal_back();
         }
+        if self.batches.is_empty() && !self.inflight() && !self.unposted(now_ms / 1000).is_empty() {
+            // Posts-only batch: a resting order with no fill still reaches the onchain book.
+            self.batches.push_back(PendingBatch::new(now_ms));
+            self.seal_back();
+        }
         if self
             .batches
             .back()
@@ -1261,10 +1278,13 @@ impl State {
         if self.inflight() {
             return None;
         }
-        let b = self.batches.front()?;
-        if !b.sealed {
+        if !self.batches.front()?.sealed {
             return None;
         }
+        let posts = self.unposted(now_ms / 1000);
+        let b = self.batches.front_mut().expect("front");
+        b.posts = posts;
+        let b = self.batches.front().expect("front");
         let orders = &self.orders;
         let abi_batch = batcher::to_abi(b, |h| {
             let e = &orders[h];
@@ -1275,6 +1295,28 @@ impl State {
         });
         self.batches.front_mut().expect("front").sent = Some(abi_batch.clone());
         Some(abi_batch)
+    }
+
+    /// Resting orders not yet on the onchain book and still valid to post, oldest first, at most one
+    /// batch's worth.
+    fn unposted(&self, now: u64) -> Vec<B256> {
+        let mut v: Vec<(u64, B256)> = self
+            .books
+            .values()
+            .flat_map(|b| b.orders())
+            .filter(|r| !self.posted.contains(&r.hash))
+            .filter_map(|r| {
+                let e = self.orders.get(&r.hash)?;
+                let o = &e.order;
+                let live = o.expiry >= now
+                    && (e.signer == o.owner
+                        || self.key_expiry(o.owner, e.signer).is_some_and(|x| x >= now));
+                live.then_some((e.seq, r.hash))
+            })
+            .collect();
+        v.sort_unstable();
+        v.truncate(MAX_BATCH_FILLS);
+        v.into_iter().map(|(_, h)| h).collect()
     }
 
     /// The in-flight batch was refused (simulation or transaction failed): reverse its fills.

@@ -712,3 +712,33 @@ fn cancel_goes_onchain_in_batch() {
     assert!(w.s.cut(ms(T0 + 20)).is_none(), "nothing left to send");
     assert!(w.s.books[&0].is_empty());
 }
+
+/// Resting orders reach the onchain book: a lone resting order gets a posts-only batch, a partly
+/// filled maker is posted with its fill, and nothing is posted twice.
+#[test]
+fn resting_orders_are_posted_once() {
+    let mut w = W::new(2000);
+    let (alice, bob, carol) = (w.alice.clone(), w.bob.clone(), w.carol.clone());
+    w.place(&carol, 1, Up, Buy, 30, E18, T0).unwrap();
+    let b = w.s.cut(ms(T0)).expect("posts-only batch");
+    assert!(b.fills.is_empty());
+    assert_eq!(b.posts.len(), 1);
+    assert_eq!(b.orders[b.posts[0] as usize].order.owner, carol.address());
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: T0 + 1,
+            fills: 0,
+            batch: Some(b),
+        }],
+        ms(T0 + 1),
+    );
+    assert!(w.s.cut(ms(T0 + 2)).is_none(), "already posted");
+    // Alice rests 2, Bob takes 1: the batch carries the fill and posts Alice's remainder.
+    w.place(&alice, 0, Up, Buy, 60, 2 * E18, T0 + 2).unwrap();
+    w.place(&bob, 0, Down, Buy, 40, E18, T0 + 2).unwrap();
+    let b = w.s.cut(ms(T0 + 5)).unwrap();
+    assert_eq!(b.fills.len(), 1);
+    assert_eq!(b.posts.len(), 1);
+    assert_eq!(b.orders[b.posts[0] as usize].order.owner, alice.address());
+}

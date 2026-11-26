@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Vm} from "forge-std/Vm.sol";
 import {Base} from "test/helpers/Base.t.sol";
 import {Exchange} from "src/Exchange.sol";
 import {Eip712} from "src/lib/Eip712.sol";
@@ -337,6 +338,51 @@ contract BatchTest is Base {
         _submit(seq);
         assertEq(ex.keyExpiry(bob, key), exp, "key auth landed once, replay was a no-op");
         assertEq(ex.getLaunch(lid).pairs, 1e16 + 1e18, "the attacker's 0.01 plus the untouched second fill");
+    }
+
+    /// Resting orders are published to the onchain book: the partly filled maker and a fresh one with no fill. A fully
+    /// filled order and a cancelled one are not.
+    function test_postsPublishTheBook() public {
+        Eip712.Order memory maker = _o(alice, 0, 0, 50, 2e18); // 1 of 2 filled below: rests
+        Eip712.Order memory taker = _o(bob, 1, 0, 50, 1e18); // fully filled: not posted
+        Eip712.Order memory fresh = _o(carol, 1, 0, 30, 1e18); // no fill: rests
+        Eip712.Order memory dead = _o(carol, 0, 0, 20, 1e18);
+        vm.prank(carol);
+        ex.cancelOrder(dead);
+        Exchange.SignedOrder[] memory os = new Exchange.SignedOrder[](4);
+        os[0] = _s(taker);
+        os[1] = _s(maker);
+        os[2] = _s(fresh);
+        os[3] = _s(dead);
+        Exchange.Batch memory b = _batch(os, _fills1(0, 1, 1, 1e18));
+        b.posts = new uint16[](4);
+        (b.posts[0], b.posts[1], b.posts[2], b.posts[3]) = (0, 1, 2, 3);
+        vm.recordLogs();
+        _submit(b);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic =
+            keccak256("OrderPosted(bytes32,address,uint256,uint64,uint8,uint8,uint8,uint128,uint64,uint64,bytes)");
+        bytes32[] memory posted = new bytes32[](4);
+        uint256 k;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] != topic) continue;
+            (bytes32 h, address owner_,,,,,, uint128 amount,,, bytes memory sig) = abi.decode(
+                logs[i].data, (bytes32, address, uint256, uint64, uint8, uint8, uint8, uint128, uint64, uint64, bytes)
+            );
+            posted[k++] = h;
+            // everything a third party needs to fill it: the event rebuilds the exact signed order
+            assertTrue(owner_ == alice || owner_ == carol);
+            assertGt(amount, 0);
+            assertEq(sig.length, 65);
+        }
+        assertEq(k, 2);
+        assertEq(posted[0], ex.orderHash(maker));
+        assertEq(posted[1], ex.orderHash(fresh));
+        // an out-of-range index is a malformed batch
+        b = _emptyBatch(ex.withdrawProcessed());
+        b.posts = new uint16[](1);
+        vm.expectRevert(Exchange.BadFill.selector);
+        ex.submitBatch(b);
     }
 
     function test_solvencyInvariant() public {
