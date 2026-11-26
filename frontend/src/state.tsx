@@ -56,6 +56,10 @@ function useAppState() {
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [injected, setInjected] = useState<InjectedInfo[]>([])
   const [walletBalance, setWalletBalance] = useState<bigint | null>(null)
+  /** ERC20 quote: the Exchange's allowance on the wallet (null = unknown or native). */
+  const [allowance, setAllowance] = useState<bigint | null>(null)
+  /** Internal Exchange balance (deposits made before approve-only trading; withdrawable). */
+  const [exchangeBalance, setExchangeBalance] = useState<bigint | null>(null)
   const [user, setUser] = useState<UserView | null>(null)
   const [key, setKey] = useState<StoredKey | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -295,6 +299,9 @@ function useAppState() {
   }, [wallet, config])
 
   const keyState: KeyState = !key ? 'none' : key.expiry * 1000 <= Date.now() ? 'expired' : 'active'
+  // ERC20 quote: trading also needs the one-time approve (batches pull straight from the wallet).
+  const needsApproval = !quoteNative && allowance != null && allowance < chainLib.APPROVED_MIN
+  const tradingReady = keyState === 'active' && !needsApproval
 
   const refreshUser = useCallback(() => {
     if (!wallet) return
@@ -302,12 +309,23 @@ function useAppState() {
       .user(wallet.address)
       .then(setUser)
       .catch(() => {})
-    if (publicClient)
+    if (publicClient) {
       chainLib
         .quoteBalance(publicClient, quoteToken, wallet.address)
         .then(setWalletBalance)
         .catch(() => {})
-  }, [wallet, publicClient, quoteToken])
+      if (config) {
+        chainLib
+          .quoteAllowance(publicClient, quoteToken, wallet.address, config.exchange)
+          .then(setAllowance)
+          .catch(() => {})
+        publicClient
+          .readContract({ address: config.exchange, abi: chainLib.exchangeAbi, functionName: 'balanceOf', args: [wallet.address] })
+          .then(setExchangeBalance)
+          .catch(() => {})
+      }
+    }
+  }, [wallet, publicClient, quoteToken, config])
 
   useEffect(() => {
     if (!wallet) return
@@ -336,6 +354,20 @@ function useAppState() {
 
   const enableTrading = useCallback(async () => {
     if (!wallet || !config || !domain) return
+    if (!quoteNative && publicClient) {
+      const id = toast({ kind: 'pending', title: `Approve ${quoteSymbol}`, body: 'One-time approval: trades are paid straight from your wallet.' }, 0)
+      try {
+        const sent = await chainLib.approveTrading(wallet.client, publicClient, wallet.account, config.exchange, quoteToken)
+        setAllowance(2n ** 256n - 1n)
+        if (sent) updateToast(id, { kind: 'success', title: `${quoteSymbol} approved`, body: 'No deposit needed: trades use your wallet balance.' })
+        else dismiss(id)
+      } catch (e) {
+        updateToast(id, { kind: 'error', title: 'Approval failed', body: errMsg(e) }, 8000)
+        return
+      }
+      // Already have a live session key: the approval was all that was missing.
+      if (key && key.expiry * 1000 > Date.now()) return
+    }
     const k = newKey()
     const a = { owner: wallet.address, key: k.address, expiry: BigInt(k.expiry), nonce: randomNonce() }
     const id = toast({ kind: 'pending', title: 'Enable trading', body: 'Sign once in your wallet: no more popups this session.' }, 0)
@@ -348,7 +380,7 @@ function useAppState() {
     } catch (e) {
       updateToast(id, { kind: 'error', title: 'Could not enable trading', body: e instanceof ApiError ? e.message : errMsg(e) })
     }
-  }, [wallet, config, domain, toast, updateToast, ownerSigner])
+  }, [wallet, config, domain, toast, updateToast, dismiss, ownerSigner, quoteNative, publicClient, quoteSymbol, quoteToken, key])
 
   const forgetKey = useCallback(() => {
     if (!wallet || !config) return
@@ -522,6 +554,9 @@ function useAppState() {
     refreshUser,
     key,
     keyState,
+    needsApproval,
+    tradingReady,
+    exchangeBalance,
     enableTrading,
     forgetKey,
     deposit,

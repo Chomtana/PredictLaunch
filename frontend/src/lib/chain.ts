@@ -130,6 +130,27 @@ export async function deposit(wallet: WalletClient, pc: PublicClient, account: W
   return wallet.writeContract({ address: exchange, abi: exchangeAbi, functionName: 'deposit', args: [amount], account, chain: wallet.chain })
 }
 
+/** An allowance at least this large counts as "approved" for approve-only trading. */
+export const APPROVED_MIN = 2n ** 128n
+const MAX_UINT = 2n ** 256n - 1n
+
+/** The Exchange's allowance on `owner`'s quote tokens (null for a native quote: nothing to approve). */
+export const quoteAllowance = (pc: PublicClient, quote: Address, owner: Address, exchange: Address): Promise<bigint | null> =>
+  isNative(quote) ? Promise.resolve(null) : pc.readContract({ address: quote, abi: erc20Abi, functionName: 'allowance', args: [owner, exchange] })
+
+/** Approve-only trading: one unlimited approve so batches pull the quote token straight from the wallet. Waits for
+ *  the receipt. No-op (returns false) for a native quote or when already approved. */
+export async function approveTrading(wallet: WalletClient, pc: PublicClient, account: Who, exchange: Address, quote: Address): Promise<boolean> {
+  if (isNative(quote)) return false
+  const owner = typeof account === 'string' ? account : account.address
+  const a = await quoteAllowance(pc, quote, owner, exchange)
+  if (a != null && a >= APPROVED_MIN) return false
+  const h = await wallet.writeContract({ address: quote, abi: erc20Abi, functionName: 'approve', args: [exchange, MAX_UINT], account, chain: wallet.chain })
+  const rc = await pc.waitForTransactionReceipt({ hash: h })
+  if (rc.status !== 'success') throw new Error('Approve reverted')
+  return true
+}
+
 /** Wallet balance of the quote token (native balance for a native quote). */
 export const quoteBalance = (pc: PublicClient, quote: Address, who: Address) =>
   isNative(quote) ? pc.getBalance({ address: who }) : pc.readContract({ address: quote, abi: erc20Abi, functionName: 'balanceOf', args: [who] })

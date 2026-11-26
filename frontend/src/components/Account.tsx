@@ -7,7 +7,8 @@ import { DEV_ACCOUNTS } from '../lib/wallet.ts'
 import { useApp } from '../state.tsx'
 import { labelsFor } from '../lib/labels.ts'
 
-/** Account drawer: wallet, exchange balance, deposit/withdraw, faucet, trading key. */
+/** Account drawer: wallet, trading balance, faucet, trading key. ERC20 quote: approve-only (no deposit/withdraw);
+ *  native quote: deposit/withdraw. */
 export function AccountDrawer() {
   const s = useApp()
   const { accountOpen, setAccountOpen } = s
@@ -66,7 +67,7 @@ function ConnectList() {
 }
 
 function Connected() {
-  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, enableTrading, forgetKey, disconnect, launches } = useApp()
+  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, tradingReady, needsApproval, exchangeBalance, enableTrading, forgetKey, disconnect, launches } = useApp()
   const native = isNative(quoteToken)
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
   const [amt, setAmt] = useState('')
@@ -102,6 +103,31 @@ function Connected() {
         </button>
       </div>
 
+      {!native ? (
+        <>
+          <div className="bal-card">
+            <div className="muted small">Available to trade</div>
+            <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} {q}</div>
+            <div className="muted small">
+              {bal != null && usd(bal, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
+            </div>
+            <div className="muted small">
+              Wallet: {walletBalance != null ? fmtBnb(walletBalance, 4) : '…'} {q} · trades are paid from and to your wallet, no deposit needed
+            </div>
+          </div>
+          {exchangeBalance != null && exchangeBalance > 0n && (
+            <div className="key-row">
+              <span className="small">
+                {fmtBnb(exchangeBalance, 4)} {q} left on the exchange from earlier deposits
+              </span>
+              <button className="btn sm ghost" disabled={busy} onClick={() => { setBusy(true); Promise.resolve(withdraw(exchangeBalance)).finally(() => setBusy(false)) }}>
+                Withdraw
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+      <>
       <div className="bal-card">
         <div className="muted small">Trading balance</div>
         <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} {q}</div>
@@ -137,12 +163,14 @@ function Connected() {
           {user.pendingWithdrawals.length} withdrawal{user.pendingWithdrawals.length > 1 ? 's' : ''} pending
         </div>
       )}
+      </>
+      )}
       <button className="btn ghost wide" onClick={faucet}>
         {native ? 'Get 1,000 test BNB (faucet)' : `Get 10,000 test ${q} (faucet)`}
       </button>
 
       <div className="section-label">Trading session</div>
-      {keyState === 'active' ? (
+      {tradingReady ? (
         <div className="key-row">
           <span>
             <i className="dot ok" /> Trading enabled · no wallet popups
@@ -153,9 +181,13 @@ function Connected() {
         </div>
       ) : (
         <>
-          <div className="muted small">Sign once to create a browser session key. It can place and cancel orders only; it can never withdraw.</div>
+          <div className="muted small">
+            {native
+              ? 'Sign once to create a browser session key. It can place and cancel orders only; it can never withdraw.'
+              : `Approve ${q} once, then sign once to create a browser session key. The key can place and cancel orders only; it can never move your funds.`}
+          </div>
           <button className="btn primary wide" onClick={enableTrading}>
-            {keyState === 'expired' ? 'Renew trading session' : 'Enable trading'}
+            {keyState === 'expired' && !needsApproval ? 'Renew trading session' : 'Enable trading'}
           </button>
         </>
       )}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, encodeFunctionData, type Address, type Hex } from 'viem'
-import { createLaunch, encodeLaunchConfig, LAUNCH_CONFIG_ABI, portalAbi, type LaunchConfig } from './chain.ts'
+import { approveTrading, createLaunch, encodeLaunchConfig, LAUNCH_CONFIG_ABI, portalAbi, type LaunchConfig } from './chain.ts'
 
 const cfg: LaunchConfig = {
   name: 'Doge Moon',
@@ -69,5 +69,37 @@ describe('chain', () => {
     const data = encodeFunctionData({ abi: portalAbi, functionName: 'newLauncher', args: call.args })
     const [f, d] = decodeFunctionData({ abi: portalAbi, data }).args as [Address, Hex]
     expect([f.toLowerCase(), d]).toEqual([factory, call.args[1]])
+  })
+})
+
+describe('approveTrading', () => {
+  const EX = '0x00000000000000000000000000000000000000e8' as Address
+  const USD = '0x0000000000000000000000000000000000000055' as Address
+  const me = '0x00000000000000000000000000000000000000a1' as Address
+  const mk = (allowance: bigint) => {
+    const writeContract = vi.fn(async () => '0xabc' as Hex)
+    const pc = {
+      readContract: vi.fn(async () => allowance),
+      waitForTransactionReceipt: vi.fn(async () => ({ status: 'success' })),
+    }
+    return { wallet: { writeContract, chain: undefined }, pc, writeContract }
+  }
+
+  it('approves unlimited once when the allowance is short', async () => {
+    const m = mk(5n)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await approveTrading(m.wallet as any, m.pc as any, me, EX, USD)).toBe(true)
+    const call = (m.writeContract.mock.calls[0] as unknown[])[0] as { functionName: string; args: unknown[] }
+    expect(call.functionName).toBe('approve')
+    expect(call.args).toEqual([EX, 2n ** 256n - 1n])
+  })
+
+  it('is a no-op when already approved or for a native quote', async () => {
+    const m = mk(2n ** 255n)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await approveTrading(m.wallet as any, m.pc as any, me, EX, USD)).toBe(false)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(await approveTrading(m.wallet as any, m.pc as any, me, EX, ZERO)).toBe(false)
+    expect(m.writeContract).not.toHaveBeenCalled()
   })
 })

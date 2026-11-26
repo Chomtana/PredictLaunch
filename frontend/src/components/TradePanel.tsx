@@ -102,7 +102,7 @@ export function TradePanel(p: TradePanelProps) {
   if (side === 1 && held === 0n) problem = `You have no ${NAME[outcome]} shares to sell`
   else if (side === 1 && sharesWei > held) problem = `You hold ${fmtShares(held)} ${NAME[outcome]} shares`
   else if (mode === 'limit' && !lpOk) problem = 'Price must be 1–99¢'
-  else if (side === 0 && p.balance != null && spend > p.balance) problem = `Not enough balance: deposit ${q} first`
+  else if (side === 0 && p.balance != null && spend > p.balance) problem = `Not enough ${q} available to trade`
   else if (mode === 'market' && levels.length === 0) problem = 'No liquidity on this side yet: try a limit order'
   const canSubmit = !problem && amount > 0n && price != null && p.tradable && !busy
 
@@ -250,7 +250,7 @@ export function TradePanel(p: TradePanelProps) {
             </button>
           ) : !p.keyReady ? (
             <button className="btn primary submit" onClick={p.onEnable}>
-              Enable trading (one signature)
+              Enable trading
             </button>
           ) : (
             <button className={`submit ${outcome === 0 ? 'up' : 'down'}`} disabled={!canSubmit} onClick={submit}>

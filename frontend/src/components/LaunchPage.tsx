@@ -17,7 +17,7 @@ import { Spinner, useNow } from './ui.tsx'
 
 export function LaunchPage({ id }: { id: number }) {
   const app = useApp()
-  const { config, live, watchLaunch, user, wallet, keyState, quoteUsd, priceOf, oraclePriceOf, livePairOf, feedSymbol } = app
+  const { config, live, watchLaunch, user, wallet, tradingReady, quoteUsd, priceOf, oraclePriceOf, livePairOf, feedSymbol } = app
   const now = useNow(1000)
   const [detail, setDetail] = useState<LaunchDetail | null>(null)
   const [book, setBook] = useState<Book | null>(null)
@@ -176,7 +176,7 @@ export function LaunchPage({ id }: { id: number }) {
             book={b}
             position={position}
             balance={balance}
-            keyReady={keyState === 'active'}
+            keyReady={tradingReady}
             connected={!!wallet}
             onEnable={app.enableTrading}
             onConnect={() => app.setAccountOpen(true)}
@@ -195,7 +195,7 @@ export function LaunchPage({ id }: { id: number }) {
                     Settlement price {l.snapped ? fmtPrice(l.settlePrice) : '—'} vs strike {fmtPrice(strike)}.
                   </>
                 )}{' '}
-                Payouts were credited to traders' balances automatically.
+                Payouts were sent to traders automatically.
               </div>
               <button className="btn wide" style={{ marginTop: 12 }} onClick={() => app.setAccountOpen(true)}>
                 View balance

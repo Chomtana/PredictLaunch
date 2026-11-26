@@ -24,7 +24,7 @@ export function FailedPanel({ isVoid, outcome, raised, target, labels = PRICE_LA
           <div>Target not reached: winners were paid in full.</div>
           <div className="muted small">
             The pool would have been {fmtBnb(raised, 3)} of {fmtBnb(target, 2)} {q}. Without a launch nothing is held back: every winning share paid 1.00 {q}
-            to your trading balance.
+            out automatically.
           </div>
         </>
       )}
