@@ -117,7 +117,7 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
         </div>
         <ProgressBar value={prog} glow={phase === 'graduated'} />
         <div className="lc-foot">
-          <span className="cut-badge">{n(l.cutBps) / 100}% to launch</span>
+          <span className="cut-badge">{n(l.cutBps) / 100}% cut</span>
           <span className="muted small">
             {phase === 'live' ? <>settles in {duration(left)}</> : phase === 'settling' ? 'settling…' : phase === 'graduated' ? 'trading on PancakeSwap' : PHASE_LABEL[phase]}
           </span>

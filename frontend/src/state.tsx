@@ -7,6 +7,7 @@ import { api, ApiError, big, openFeed, type Book, type Config, type Feed, type L
 import * as chainLib from './lib/chain.ts'
 import { chainFor, errMsg, publicClientFor, type LaunchConfig } from './lib/chain.ts'
 import { authorizeKeyMsg, randomNonce, signAuthorizeKey, signCancel, signOrder, type Domain, type Msg, type TypedSigner } from './lib/eip712.ts'
+import { binancePair, streamTrades } from './lib/binance.ts'
 import { kindOf } from './lib/labels.ts'
 import { mineSalt, predictToken, randomSeed } from './lib/salt.ts'
 import { accountOf, clearKey, loadKey, newKey, saveKey, type StoredKey } from './lib/tradingKey.ts'
@@ -162,7 +163,51 @@ function useAppState() {
     }
   }, [config, watchedFeeds, putPrice])
 
-  const priceOf = useCallback((f: Address | string | null | undefined) => (f ? (prices[lc(f)]?.price ?? null) : null), [prices])
+  // ---------------------------------------------------------------- Binance live prices (display only)
+  // Feeds with a Binance pair show Binance trades as the "now" price and chart line; settlement still
+  // uses the oracle (`oraclePriceOf`). Keyed by feed address like `prices`.
+  const [livePrices, setLivePrices] = useState<Record<string, PricePt>>({})
+  const liveListeners = useRef(new Set<(feed: string, t: number, p: bigint) => void>())
+  const feedPairs = useMemo(() => {
+    const m = new Map<string, string[]>() // pair → feed addresses
+    for (const f of config?.feeds ?? []) {
+      const pair = binancePair(f.symbol)
+      if (pair) m.set(pair, [...(m.get(pair) ?? []), lc(f.address)])
+    }
+    return m
+  }, [config])
+  useEffect(() => {
+    if (feedPairs.size === 0) return
+    return streamTrades([...feedPairs.keys()], ({ pair, t, price }) => {
+      const feeds = feedPairs.get(pair) ?? []
+      setLivePrices((p) => {
+        const n = { ...p }
+        for (const f of feeds) n[f] = { t, price }
+        return n
+      })
+      for (const f of feeds) liveListeners.current.forEach((fn) => fn(f, t, price))
+    })
+  }, [feedPairs])
+  const onLiveTick = useCallback((fn: (feed: string, t: number, p: bigint) => void) => {
+    liveListeners.current.add(fn)
+    return () => {
+      liveListeners.current.delete(fn)
+    }
+  }, [])
+  /** Binance pair for a feed, or null when it has none (the chart then uses the oracle). */
+  const livePairOf = useCallback((f: string) => binancePair(config?.feeds.find((x) => lc(x.address) === lc(f))?.symbol), [config])
+
+  const oraclePriceOf = useCallback((f: Address | string | null | undefined) => (f ? (prices[lc(f)]?.price ?? null) : null), [prices])
+  /** Display price: Binance when streaming (fresher than 15 s), else the oracle. */
+  const priceOf = useCallback(
+    (f: Address | string | null | undefined) => {
+      if (!f) return null
+      const lp = livePrices[lc(f)]
+      if (lp && Date.now() / 1000 - lp.t < 15) return lp.price
+      return oraclePriceOf(f)
+    },
+    [livePrices, oraclePriceOf],
+  )
   const bnbUsd = priceOf(bnbFeed)
   // The Exchange's collateral: native BNB (priced by the BNB feed) or a USD token (priced at 1).
   const quoteToken = (config?.quoteToken ?? chainLib.NATIVE) as Address
@@ -372,6 +417,18 @@ function useAppState() {
   )
 
   // ---------------------------------------------------------------- orders (signed by the session key)
+  // A stored key the sequencer doesn't recognize (e.g. a dev fork restarted: same Exchange address, fresh
+  // sequencer state) fails every message with bad_signature. Drop it so "Enable trading" re-authorizes.
+  const staleKey = useCallback(
+    (e: unknown) => {
+      if (!(e instanceof ApiError) || e.code !== 'bad_signature' || !wallet || !config) return false
+      clearKey(config.chainId, config.exchange, wallet.address)
+      setKey(null)
+      toast({ kind: 'error', title: 'Trading key not recognized', body: 'The sequencer no longer knows this trading key. Enable trading again, then retry.' }, 8000)
+      return true
+    },
+    [wallet, config, toast],
+  )
   const placeOrder = useCallback(
     async (p: OrderParams) => {
       if (!wallet || !domain || !key) {
@@ -398,11 +455,11 @@ function useAppState() {
         refreshUser()
         return res.results[0]
       } catch (e) {
-        toast({ kind: 'error', title: 'Order rejected', body: e instanceof ApiError ? `${e.code}: ${e.message}` : errMsg(e) }, 7000)
+        if (!staleKey(e)) toast({ kind: 'error', title: 'Order rejected', body: e instanceof ApiError ? `${e.code}: ${e.message}` : errMsg(e) }, 7000)
         return null
       }
     },
-    [wallet, domain, key, toast, refreshUser],
+    [wallet, domain, key, toast, refreshUser, staleKey],
   )
 
   const cancelOrder = useCallback(
@@ -412,10 +469,10 @@ function useAppState() {
         await api.msgs([await signCancel(domain, accountOf(key), { owner: wallet.address, orderHash, nonce: randomNonce() })])
         refreshUser()
       } catch (e) {
-        toast({ kind: 'error', title: 'Cancel failed', body: e instanceof ApiError ? e.message : errMsg(e) })
+        if (!staleKey(e)) toast({ kind: 'error', title: 'Cancel failed', body: e instanceof ApiError ? e.message : errMsg(e) })
       }
     },
-    [wallet, domain, key, toast, refreshUser],
+    [wallet, domain, key, toast, refreshUser, staleKey],
   )
 
   return {
@@ -426,6 +483,9 @@ function useAppState() {
     wsUp,
     prices,
     priceOf,
+    oraclePriceOf,
+    livePairOf,
+    onLiveTick,
     bnbUsd,
     bnbFeed,
     quoteToken,

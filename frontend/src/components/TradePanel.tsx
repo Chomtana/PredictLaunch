@@ -255,7 +255,7 @@ export function TradePanel(p: TradePanelProps) {
       )}
 
       <div className="tp-row">
-        <span className="cut-badge">{p.cutBps / 100}% to launch</span>
+        <span className="cut-badge">{p.cutBps / 100}% cut</span>
         <span className="muted small">
           winners get {(10000 - p.cutBps) / 100}¢ · bal {p.balance != null ? fmtBnb(p.balance, 3) : '—'} {q}
         </span>

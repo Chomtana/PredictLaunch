@@ -14,20 +14,28 @@ import {
 } from 'lightweight-charts'
 import type { Address } from 'viem'
 import { api } from '../lib/api.ts'
+import { history as binanceHistory } from '../lib/binance.ts'
 import { chartCrosshair, chartTick } from '../lib/format.ts'
 import { num18 } from '../lib/units.ts'
 import { useApp } from '../state.tsx'
 
 const HISTORY_SEC = 3 * 3600
 
-/** Live feed price (REST history + WS ticks) with a dashed line at the strike. */
+/**
+ * Live price with a dashed line at the strike. Feeds with a Binance pair draw Binance trades (display
+ * only) with a dashed reference line at the latest oracle price, which settlement uses; other feeds
+ * draw the oracle itself.
+ */
 export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike: bigint; settleTime: number }) {
-  const { onPriceTick } = useApp()
+  const { onPriceTick, onLiveTick, livePairOf } = useApp()
+  const pair = livePairOf(feed)
   const el = useRef<HTMLDivElement>(null)
   const chart = useRef<IChartApi | null>(null)
   const series = useRef<ISeriesApi<'Area'> | null>(null)
+  const oracleLine = useRef<IPriceLine | null>(null)
+  // Reference levels kept in view by the autoscale (price lines alone don't widen the scale).
+  const levels = useRef<{ strike: number | null; oracle: number | null }>({ strike: null, oracle: null })
   const strikeLine = useRef<IPriceLine | null>(null)
-  const lastT = useRef(0)
   const [points, setPoints] = useState(0)
 
   useEffect(() => {
@@ -58,12 +66,23 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
       lastValueVisible: true,
       crosshairMarkerRadius: 4,
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      autoscaleInfoProvider: (base: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const r = base()
+        if (!r) return r
+        for (const v of [levels.current.strike, levels.current.oracle]) {
+          if (v == null) continue
+          r.priceRange.minValue = Math.min(r.priceRange.minValue, v)
+          r.priceRange.maxValue = Math.max(r.priceRange.maxValue, v)
+        }
+        return r
+      },
     })
     chart.current = c
     return () => {
       c.remove()
       chart.current = null
       series.current = null
+      oracleLine.current = null
       strikeLine.current = null
     }
   }, [])
@@ -82,20 +101,48 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
       title: 'Price to beat',
     })
     const p = num18(strike)
+    levels.current.strike = p
     const prec = p >= 1000 ? 2 : p >= 1 ? 4 : 6
     s.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: 1 / 10 ** prec } })
   }, [strike])
 
-  // History, then poll as a fallback for WS ticks.
+  // Oracle: sequencer REST history, WS ticks, and a 5 s poll as a fallback. Without a Binance pair it is
+  // the chart's line; with one, only its latest value is drawn, as a dashed "Oracle" reference line.
   useEffect(() => {
+    const s = series.current
+    if (!s) return
     let stop = false
-    lastT.current = 0
-    series.current?.setData([])
-    setPoints(0)
+    let last = 0
+    const clearRef = () => {
+      if (oracleLine.current) s.removePriceLine(oracleLine.current)
+      oracleLine.current = null
+      levels.current.oracle = null
+    }
+    clearRef()
+    if (!pair) {
+      s.setData([])
+      setPoints(0)
+    }
+    const setRef = (price: bigint) => {
+      const v = num18(price)
+      levels.current.oracle = v
+      if (oracleLine.current) oracleLine.current.applyOptions({ price: v })
+      else
+        oracleLine.current = s.createPriceLine({
+          price: v,
+          color: '#5aa9ff',
+          lineWidth: 1,
+          lineStyle: LineStyle.LargeDashed,
+          axisLabelVisible: true,
+          title: 'Oracle',
+        })
+    }
     const push = (t: number, price: bigint) => {
-      if (!series.current || t <= lastT.current) return
-      lastT.current = t
-      series.current.update({ time: t as UTCTimestamp, value: num18(price) })
+      t = Math.floor(t)
+      if (stop || t < last) return
+      last = t
+      if (pair) return setRef(price)
+      s.update({ time: t as UTCTimestamp, value: num18(price) })
       setPoints((n) => n + 1)
     }
     const now = Math.floor(Date.now() / 1000)
@@ -103,14 +150,11 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
     api
       .prices(feed, since)
       .then((pts) => {
-        if (stop || !series.current) return
-        const data: { time: UTCTimestamp; value: number }[] = []
-        for (const p of pts) {
-          if (data.length && p.t <= data[data.length - 1].time) continue
-          data.push({ time: p.t as UTCTimestamp, value: num18(p.price) })
-        }
-        series.current.setData(data)
-        lastT.current = data.length ? data[data.length - 1].time : 0
+        if (stop || !pts.length) return
+        const data = dedupe(pts.map((p) => ({ t: p.t, price: BigInt(p.price) })))
+        last = data[data.length - 1].time
+        if (pair) return setRef(BigInt(pts[pts.length - 1].price))
+        s.setData(data)
         setPoints(data.length)
         chart.current?.timeScale().fitContent()
       })
@@ -120,7 +164,7 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
     })
     const poll = setInterval(() => {
       api
-        .prices(feed, lastT.current || since)
+        .prices(feed, last || since)
         .then((pts) => pts.forEach((p) => push(p.t, BigInt(p.price))))
         .catch(() => {})
     }, 5000)
@@ -128,15 +172,80 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
       stop = true
       off()
       clearInterval(poll)
+      clearRef()
     }
-  }, [feed, settleTime, onPriceTick])
+  }, [feed, pair, settleTime, onPriceTick])
+
+  // Binance line (display only): 1 m + 1 s candle history, then trades.
+  useEffect(() => {
+    if (!pair || !series.current) return
+    const s = series.current
+    let stop = false
+    let last = 0
+    s.setData([])
+    setPoints(0)
+    const buffered: { t: number; price: bigint }[] = []
+    let loaded = false
+    const push = (t: number, price: bigint) => {
+      t = Math.floor(t)
+      if (stop || t < last) return
+      last = t
+      s.update({ time: t as UTCTimestamp, value: num18(price) })
+      setPoints((n) => n + 1)
+    }
+    const off = onLiveTick((f, t, p) => {
+      if (f.toLowerCase() !== feed.toLowerCase()) return
+      if (loaded) push(t, p)
+      else buffered.push({ t, price: p })
+    })
+    const now = Math.floor(Date.now() / 1000)
+    binanceHistory(pair, Math.min(now, settleTime) - HISTORY_SEC)
+      .then((pts) => {
+        if (stop) return
+        const data = dedupe(pts)
+        s.setData(data)
+        last = data.length ? data[data.length - 1].time : 0
+        setPoints(data.length)
+        chart.current?.timeScale().fitContent()
+      })
+      .catch(() => {})
+      .finally(() => {
+        loaded = true
+        buffered.forEach((b) => push(b.t, b.price))
+      })
+    return () => {
+      stop = true
+      off()
+    }
+  }, [feed, pair, settleTime, onLiveTick])
 
   return (
     <div className="chart-wrap">
       <div ref={el} style={{ position: 'absolute', inset: 0 }} />
       {points === 0 && <div className="chart-empty">Waiting for price data…</div>}
-      <div className="chart-legend">Source: CoinMarketCap × Atlas</div>
+      <div className="chart-legend">
+        {pair ? (
+          <>
+            Live: Binance {pair} · dashed blue: Atlas oracle (settles the market)
+          </>
+        ) : (
+          'Source: CoinMarketCap × Atlas'
+        )}
+      </div>
     </div>
   )
 }
 
+
+/** Whole-second, strictly increasing points (the last price in each second wins). */
+function dedupe(pts: { t: number; price: bigint }[]): { time: UTCTimestamp; value: number }[] {
+  const out: { time: UTCTimestamp; value: number }[] = []
+  for (const p of pts) {
+    const time = Math.floor(p.t) as UTCTimestamp
+    const v = num18(p.price)
+    if (out.length && time < out[out.length - 1].time) continue
+    if (out.length && time === out[out.length - 1].time) out[out.length - 1].value = v
+    else out.push({ time, value: v })
+  }
+  return out
+}

@@ -16,6 +16,8 @@ export function PriceHeader(p: {
   feedSym: string
   strike: bigint
   current: bigint | null
+  /** Oracle price (settles the market), shown under a Binance display price; null to hide. */
+  oracle?: bigint | null
   settleTime: number
   settlePrice: bigint | null
   phase: Phase
@@ -60,6 +62,11 @@ export function PriceHeader(p: {
             )}
           </div>
           <div className="value num">{shown != null ? fmtPrice(shown) : '—'}</div>
+          {p.phase === 'live' && p.oracle != null && (
+            <div className="muted small" title="Live price is from Binance (display only). The market settles on the onchain oracle.">
+              oracle {fmtPrice(p.oracle)}
+            </div>
+          )}
         </div>
         {p.phase === 'live' ? (
           <div className={`countdown ${left > 3600 ? 'calm' : ''}`} aria-label="Time to settlement">

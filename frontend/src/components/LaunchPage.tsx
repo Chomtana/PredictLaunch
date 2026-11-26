@@ -17,7 +17,7 @@ import { Spinner, useNow } from './ui.tsx'
 
 export function LaunchPage({ id }: { id: number }) {
   const app = useApp()
-  const { config, live, watchLaunch, user, wallet, keyState, quoteUsd, priceOf, feedSymbol } = app
+  const { config, live, watchLaunch, user, wallet, keyState, quoteUsd, priceOf, oraclePriceOf, livePairOf, feedSymbol } = app
   const now = useNow(1000)
   const [detail, setDetail] = useState<LaunchDetail | null>(null)
   const [book, setBook] = useState<Book | null>(null)
@@ -144,6 +144,7 @@ export function LaunchPage({ id }: { id: number }) {
             feedSym={feedSym}
             strike={strike}
             current={current}
+            oracle={livePairOf(l.feed) ? (oraclePriceOf(l.feed) ?? (l.currentPrice ? big(l.currentPrice) : null)) : null}
             settleTime={settleTime}
             settlePrice={l.snapped ? big(l.settlePrice) : null}
             phase={phase}
