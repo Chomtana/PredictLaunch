@@ -251,14 +251,26 @@ export function setup(rpc: string, api: string, deployPath: string) {
       await fund(acct, depositAmount > have ? depositAmount - have : 0n)
       await approveTrading(wallet(acct), pc, acct, deploy.exchange, quote)
     }
-    const key = privateKeyToAccount(generatePrivateKey())
-    const a = { owner: acct.address, key: key.address, expiry: (await chainNow()) + 7n * 86400n, nonce: randomNonce() }
-    const sig = await signAuthorizeKey(D, acct, a)
-    await post('/api/msgs', [authorizeKeyMsg(a, sig)])
+    const b: Bot = { owner: acct.address, acct, key: acct, resting: new Map() }
+    await authorize(b)
     // The user view watches the address; the poke reads its funds now.
     await get(`/api/user/${acct.address}`)
     await post('/api/poke')
-    return { owner: acct.address, acct, key, resting: new Map() }
+    return b
+  }
+
+  /**
+   * Give `b` a fresh trading key. Also the recovery path: a batch the chain refuses (e.g. BadBatchTs) takes the
+   * keys it was authorizing with it, after which every order signed by the old key is `bad_signature`.
+   */
+  async function authorize(b: Bot) {
+    const key = privateKeyToAccount(generatePrivateKey())
+    const a = { owner: b.owner, key: key.address, expiry: (await chainNow()) + 7n * 86400n, nonce: randomNonce() }
+    const sig = await signAuthorizeKey(D, b.acct, a)
+    await post('/api/msgs', [authorizeKeyMsg(a, sig)])
+    b.key = key
+    // Orders signed by the old key are gone with it.
+    b.resting.clear()
   }
 
   /** Keep a bot trading: when its free Exchange balance drops below `min`, refill the wallet and deposit `amount`. */
@@ -346,7 +358,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, refillGas, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, authorize, topUp, refillGas, place, cancelAll }
 }
 
 export interface Bot {

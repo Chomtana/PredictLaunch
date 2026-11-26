@@ -377,6 +377,7 @@ async function main() {
       continue
     }
     tick++
+    let reauthorized = false
     await checkGas()
     if (tick % 10 === 0) await topUpAll([maker, ...takers])
     // One market failing (settled mid-tick, a reverted order...) must not starve the others.
@@ -400,6 +401,18 @@ async function main() {
         console.log(`seed: #${l.id} ${l.symbol} failed: ${msg}`)
         // A bot ran out of quote mid-tick: mint more right away instead of waiting for the periodic top-up.
         if (/insufficient_balance|not enough free/i.test(msg)) await topUpAll([maker, ...takers])
+        // The sequencer lost our trading keys (a refused batch reverses the keys it authorized): new keys, once a tick.
+        if (/bad_signature|key_expired/i.test(msg) && !reauthorized) {
+          reauthorized = true
+          for (const b of [maker, ...takers]) {
+            try {
+              await S.authorize(b)
+              console.log(`seed: re-authorized a trading key for ${b.owner}`)
+            } catch (err) {
+              console.log(`seed: re-authorizing ${b.owner} failed: ${(err as Error).message.split('\n')[0]}`)
+            }
+          }
+        }
       }
     }
     if (tick % 10 === 0) {
