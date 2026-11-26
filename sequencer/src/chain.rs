@@ -365,6 +365,9 @@ const FOUR_SIG_TTL: u64 = 600;
 /// include, and such txs stay pending forever. The dev fork (base fee 0) takes it too.
 const GAS_PRICE: u128 = 100_000_000;
 
+/// How long a sent tx may take to be mined before it counts as dropped.
+const RECEIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Max blocks per `eth_getLogs`.
 const LOG_CHUNK: u64 = 2_000;
 
@@ -478,12 +481,19 @@ impl RpcChain {
             .block(BlockId::pending())
             .await
             .with_context(|| format!("{} would revert", C::SIGNATURE))?;
-        let receipt = self
-            .provider
-            .send_transaction(tx)
-            .await?
-            .get_receipt()
-            .await?;
+        let pending = self.provider.send_transaction(tx).await?;
+        let hash = *pending.tx_hash();
+        // An RPC can accept a tx and then drop it; without a deadline the batch / keeper loop would
+        // wait on its receipt forever. Timing out frees the loop to retry (the nonce is re-read).
+        let receipt = tokio::time::timeout(RECEIPT_TIMEOUT, pending.get_receipt())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{} tx {hash} not mined after {}s (dropped?)",
+                    C::SIGNATURE,
+                    RECEIPT_TIMEOUT.as_secs()
+                )
+            })??;
         anyhow::ensure!(
             receipt.status(),
             "{} reverted in tx {}",
