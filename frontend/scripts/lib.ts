@@ -7,6 +7,8 @@ import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
 
+export { niceStrike, tomorrowLabel } from '../src/lib/catalog.ts'
+
 export const E18 = 10n ** 18n
 export const UNIT = 10n ** 16n
 
@@ -282,10 +284,6 @@ export interface Bot {
   resting: Map<Hex, bigint>
 }
 
-/** "Nov 27, 2026": tomorrow's date as Cournot's daily US-city rain markets name it (US Eastern). */
-export function tomorrowLabel(now = Date.now()): string {
-  return new Date(now + 86400_000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })
-}
 
 /** Cournot probability (0..1) → a question launch's quoting centre in cents, clamped 3..97; 50 when unknown. */
 export function oracleCents(p: number | null | undefined): number {
@@ -293,12 +291,6 @@ export function oracleCents(p: number | null | undefined): number {
   return Math.min(97, Math.max(3, Math.round(p * 100)))
 }
 
-/** `price` (18-dec) moved by `offBps` basis points, rounded to the nearest multiple of `step` (18-dec, > 0). */
-export function niceStrike(price: bigint, offBps: number, step: bigint): bigint {
-  const moved = (price * BigInt(10_000 + offBps)) / 10_000n
-  const k = (moved + step / 2n) / step
-  return (k > 0n ? k : 1n) * step
-}
 
 /** Standard normal CDF (Abramowitz–Stegun 7.1.26). */
 export function phi(x: number): number {

@@ -1,4 +1,5 @@
-// What the demo seed launches: meme names, logos and Cournot questions, picked at random each round.
+// Meme names, logos and Cournot questions for demo launches: the seed bots (scripts/seed.ts) and the
+// Create page's Quick tab both pick from here at random.
 //
 // Price launches use the asset's coin icon; question launches a photo of what the question is about.
 // Both are served by the frontend from public/seed/ (sources and licences: public/seed/CREDITS.md), so
@@ -20,7 +21,7 @@ const img = (slug: string) => `/seed/${slug}.jpg`
 export const ICONS: Record<Asset, string> = { BTC: '/seed/btc.svg', BNB: '/seed/bnb.svg', ETH: '/seed/eth.svg' }
 
 /** Price display step for a human-looking strike ("BTC ≥ $97,250", not "$97,233.18"). */
-export const STRIKE_STEP: Record<Asset, number> = { BTC: 50, BNB: 0.5, ETH: 5 }
+export const STRIKE_STEP: Record<Asset, number> = { BTC: 50, BNB: 1, ETH: 5 }
 
 export const PRICE_MEMES: Record<Asset, Meme[]> = {
   BTC: [
@@ -229,6 +230,21 @@ export function shuffle<T>(xs: readonly T[]): T[] {
     ;[a[i], a[j]] = [a[j], a[i]]
   }
   return a
+}
+
+/** "Nov 27, 2026": tomorrow's date as Cournot's daily US-city rain markets name it (US Eastern). */
+export function tomorrowLabel(now = Date.now()): string {
+  return new Date(now + 86400_000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })
+}
+
+/** A theme's search text for today (`{tomorrow}` filled in). */
+export const searchText = (q: QuestionTheme, now = Date.now()) => q.search.replace('{tomorrow}', tomorrowLabel(now))
+
+/** `price` (18-dec) moved by `offBps` basis points, rounded to the nearest multiple of `step` (18-dec, > 0). */
+export function niceStrike(price: bigint, offBps: number, step: bigint): bigint {
+  const moved = (price * BigInt(10_000 + offBps)) / 10_000n
+  const k = (moved + step / 2n) / step
+  return (k > 0n ? k : 1n) * step
 }
 
 /** Every image path in the catalog (lib.test.ts checks each file exists under public/). */

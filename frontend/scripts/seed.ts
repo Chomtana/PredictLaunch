@@ -4,7 +4,7 @@
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
 // Each round creates 2-3 price launches and 1-2 Cournot question launches through Portal.newLauncher +
-// our factory (anvil #3 is the creator), picked at random from scripts/seed-catalog.ts:
+// our factory (anvil #3 is the creator), picked at random from src/lib/catalog.ts:
 //   price:    a random BTC/BNB/ETH meme (name, symbol, coin icon), strike = live price -0.3%..+0.5% rounded
 //             to a nice number, settles in 10-30 min, random cut 10-30%, target 2.15-4 BNB (x1000 USDT)
 //   question: a random real-world theme (weather, Fed, Starship, football...) searched on Cournot through
@@ -23,7 +23,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { parseEther } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
 import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
-import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, isPriceMarket, pick, shuffle, type Asset, type Meme } from './seed-catalog.ts'
+import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, isPriceMarket, pick, shuffle, type Asset, type Meme } from '../src/lib/catalog.ts'
 
 const RPC = arg('rpc', 'http://127.0.0.1:8545')!
 const API = arg('api', 'http://127.0.0.1:8787')!

@@ -51,7 +51,7 @@ relay (copies live testnet prices into the fork every 2 s) → the sequencer (`-
 seed bots (each round: 2-3 BTC/BNB/ETH price launches with random meme names, coin-icon logos,
 near-the-money strikes, 10-30 min, random cut and target; plus 1-2 Cournot question launches on live
 real-world markets such as city rain, the Fed or Starship, with a matching photo; catalog in
-`frontend/scripts/seed-catalog.ts`, images in `frontend/public/seed/`; a maker and two takers trade
+`frontend/src/lib/catalog.ts`, images in `frontend/public/seed/`; a maker and two takers trade
 around a Black-Scholes-style fair price, or the Cournot probability) → Vite. When every seeded
 launch has settled, the bots create a new round. Logs are in `.dev/*.log`; Ctrl-C stops everything.
 

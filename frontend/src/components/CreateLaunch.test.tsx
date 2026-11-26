@@ -30,6 +30,7 @@ const priceOf = (f: Address) => (f === BTC ? 100_000n * E18 : f === BNB ? 600n *
 
 function setup(onSubmit = vi.fn(async () => {})) {
   render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={onSubmit} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Price' }))
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Moon Dog' } })
   fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'MDOG' } })
   return onSubmit
@@ -64,6 +65,7 @@ describe('CreateLaunchForm', () => {
   it('USDT quote: target in USDT from minTarget, priced at $1', () => {
     const usdt = { ...config, quoteToken: '0x190C989D5665a0e404B444b53CAE9AbCfb600157' as Address, quoteSymbol: 'USDT', minTarget: (1500n * E18).toString() }
     render(<CreateLaunchForm config={usdt} priceOf={priceOf} quoteUsd={E18} connected onSubmit={vi.fn(async () => {})} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Price' }))
     expect(screen.getByLabelText('Target (USDT)')).toBeTruthy()
     expect((screen.getByLabelText(/Target/) as HTMLInputElement).value).toBe('1500')
     expect(screen.getByText(/\$1,500 · pool needed/)).toBeTruthy()

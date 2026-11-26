@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { parseEther } from 'viem'
 import { describe, expect, it } from 'vitest'
 import { niceStrike, oracleCents, tomorrowLabel } from './lib.ts'
-import { allImages, isPriceMarket, PRICE_MEMES, QUESTIONS } from './seed-catalog.ts'
+import { allImages, isPriceMarket, PRICE_MEMES, QUESTIONS } from '../src/lib/catalog.ts'
 
 describe('seed helpers for the question launch', () => {
   it('tomorrow as Cournot names daily markets', () => {

@@ -449,7 +449,9 @@ function useAppState() {
 
   /** Mines a salt, then Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)). */
   const createLaunch = useCallback(
-    async (cfg: Omit<LaunchConfig, 'salt'>, onStage?: (s: string) => void): Promise<boolean> => {
+    /** `draft` may be a function: it is called once the salt is mined, right before the wallet prompt, so a
+     *  short settlement ("1 min") is measured from then, not from the click. */
+    async (draft: Omit<LaunchConfig, 'salt'> | (() => Omit<LaunchConfig, 'salt'>), onStage?: (s: string) => void): Promise<boolean> => {
       if (!wallet || !config) return false
       onStage?.('Mining a …7777 token address')
       let salt: Hex
@@ -460,6 +462,7 @@ function useAppState() {
         return false
       }
       onStage?.(`Token ${predictToken(salt).slice(0, 8)}…7777 · confirm in wallet`)
+      const cfg = typeof draft === 'function' ? draft() : draft
       const fee = BigInt(config.saltLockFee)
       const rc = await runTx(
         'Create launch',

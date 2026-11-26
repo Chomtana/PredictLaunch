@@ -54,7 +54,7 @@ scripts/     dev.sh (fork demo), e2e.sh
   No recurring rounds. `Order.round` stays in the EIP-712 type for vector stability and **must be
   0**.
 - Timing: `SNAP_TOLERANCE = 5 s`, `GRACE = 60 s`, `MAX_LAG = 15 s`, `FORCE_DELAY = 600 s`;
-  `MIN_DURATION = 300 s`, `MAX_DURATION = 30 days` (settleTime − creation time).
+  `MIN_DURATION = 60 s` (lowered from 300 s on 2026-11-26 for 1-minute demo launches), `MAX_DURATION = 30 days` (settleTime − creation time).
 - Feeds: any enabled feed (the spec's feed table: BTCB, BNB, ANKR and the slow feeds; FDUSD and VAI
   excluded). `setFeed(feed, enabled)`.
 - Atlas feed state: storage slot `0x32` = `updatedAt(uint48) | startedAt(uint48) | answer(uint80)`,

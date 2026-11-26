@@ -9,7 +9,7 @@ pub const SNAP_TOLERANCE: u64 = 5;
 pub const GRACE: u64 = 60;
 pub const MAX_LAG: u64 = 15;
 pub const FORCE_DELAY: u64 = 600;
-pub const MIN_DURATION: u64 = 300;
+pub const MIN_DURATION: u64 = 60;
 pub const MAX_DURATION: u64 = 30 * 86_400;
 /// Question launches: no proposal by settleTime + this → `resolve` voids.
 pub const QUESTION_DEADLINE: u64 = 7 * 86_400;

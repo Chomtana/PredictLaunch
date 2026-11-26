@@ -134,7 +134,7 @@ contract QuestionTest is Base {
 
         // the shared rules still apply
         c = _qcfg();
-        c.settleTime = uint64(block.timestamp + 299);
+        c.settleTime = uint64(block.timestamp + 59);
         _expectRegisterRevert(c, Exchange.BadDuration.selector);
         c = _qcfg();
         c.cutBps = 1200;

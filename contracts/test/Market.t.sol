@@ -41,7 +41,7 @@ contract MarketTest is Base {
         _expectRegisterRevert(c, Exchange.BadConfig.selector);
 
         c = _cfg();
-        c.settleTime = uint64(block.timestamp + 299);
+        c.settleTime = uint64(block.timestamp + 59);
         _expectRegisterRevert(c, Exchange.BadDuration.selector);
         c.settleTime = uint64(block.timestamp + 30 days + 1);
         _expectRegisterRevert(c, Exchange.BadDuration.selector);
@@ -67,7 +67,7 @@ contract MarketTest is Base {
 
         // valid: bounds inclusive
         c = _cfg();
-        c.settleTime = uint64(block.timestamp + 300);
+        c.settleTime = uint64(block.timestamp + 60);
         c.cutBps = 3000;
         vm.expectEmit(address(ex));
         emit Exchange.LaunchCreated(
@@ -82,7 +82,7 @@ contract MarketTest is Base {
         assertEq(l.rail, RAIL);
         assertEq(l.token, TOKEN);
         assertEq(l.createdAt, block.timestamp);
-        assertEq(l.settleTime, block.timestamp + 300);
+        assertEq(l.settleTime, block.timestamp + 60);
         assertEq(l.cutBps, 3000);
         assertEq(l.status, 0);
         assertEq(l.name, "Moon");

@@ -8,6 +8,7 @@ import { PRICE_LABELS, QUESTION_LABELS } from '../lib/labels.ts'
 import { useApp } from '../state.tsx'
 import { CoinAvatar, Spinner } from './ui.tsx'
 import { MarketRow } from './Cournot.tsx'
+import { QuickLaunches } from './QuickLaunch.tsx'
 
 export type LaunchDraft = Omit<LaunchConfig, 'salt'>
 
@@ -58,13 +59,14 @@ interface FormProps {
   /** USD price of the quote token (BNB/USD, or 1 for a USD token). */
   quoteUsd: bigint | null
   connected: boolean
-  onSubmit: (cfg: LaunchDraft) => Promise<unknown> | void
+  /** A function draft is evaluated right before the wallet prompt (see AppState.createLaunch). */
+  onSubmit: (cfg: LaunchDraft | (() => LaunchDraft)) => Promise<unknown> | void
   busy?: string | null
   cournot?: CournotClient
 }
 
 export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot }: FormProps) {
-  const [kind, setKind] = useState<'price' | 'question'>('price')
+  const [kind, setKind] = useState<'quick' | 'price' | 'question'>('quick')
   const isQ = kind === 'question'
   const q = config.quoteSymbol ?? 'BNB'
   const minTarget = BigInt(config.minTarget)
@@ -208,6 +210,25 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     setStrike(strikeText((current * BigInt(10000 + pct * 100)) / 10000n))
   }
 
+  const tabs = (
+    <div className="seg" role="group" aria-label="Launch kind" style={{ marginBottom: 10 }}>
+      {(['quick', 'price', 'question'] as const).map((k) => (
+        <button key={k} type="button" aria-pressed={kind === k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>
+          {k === 'quick' ? 'Quick' : k === 'price' ? 'Price' : 'Question'}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (kind === 'quick')
+    return (
+      <div className="panel create-form quick-page">
+        <h2>Create a launch</h2>
+        {tabs}
+        <QuickLaunches config={config} priceOf={priceOf} connected={connected} busy={busy} cournot={cournot} onSubmit={onSubmit} />
+      </div>
+    )
+
   return (
     <div className="create-grid">
       <form
@@ -218,14 +239,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         }}
       >
         <h2>Create a launch</h2>
-        <div className="seg" role="group" aria-label="Launch kind" style={{ marginBottom: 10 }}>
-          <button type="button" aria-pressed={!isQ} className={!isQ ? 'on' : ''} onClick={() => setKind('price')}>
-            Price
-          </button>
-          <button type="button" aria-pressed={isQ} className={isQ ? 'on' : ''} onClick={() => setKind('question')}>
-            Question
-          </button>
-        </div>
+        {tabs}
         {isQ ? (
           <p className="muted lead">
             Launch a memecoin on a yes/no question. Traders bet YES or NO; the Cournot oracle supplies the odds and the settlement evidence. If the pool

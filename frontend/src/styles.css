@@ -1443,3 +1443,56 @@ textarea {
   word-break: break-all;
   text-align: right;
 }
+
+/* ------------------------------------------------------------------ create: Quick tab */
+.quick-page {
+  max-width: none;
+}
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+@media (max-width: 1200px) {
+  .quick-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+}
+.quick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+.quick-card .btn {
+  margin-top: auto;
+}
+.quick-id {
+  min-width: 0;
+  flex: 1;
+}
+.quick-id .lc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-q {
+  font-weight: 600;
+  min-height: 2.6em;
+}
+.quick-tag {
+  align-self: flex-start;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(76, 141, 255, 0.12);
+  color: var(--blue);
+}
+.quick-tag.fast {
+  background: var(--accent-bg);
+  color: var(--accent);
+}

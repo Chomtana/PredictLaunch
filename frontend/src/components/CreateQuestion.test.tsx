@@ -54,17 +54,18 @@ const submit = () => screen.getByRole('button', { name: /create launch/i }) as H
 function setup(cournot = { resolve: vi.fn(async () => ({ markets })), probability: vi.fn(async () => record) }) {
   const onSubmit = vi.fn(async () => {})
   render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={onSubmit} cournot={cournot} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Question' }))
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Fed Hike' } })
   fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'HIKE' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Question' }))
   fireEvent.change(screen.getByLabelText('Question'), { target: { value: Q } })
   return { cournot, onSubmit }
 }
 
 describe('CreateLaunchForm question mode', () => {
-  it('price mode is the default and has no question field', () => {
-    render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Price' }).getAttribute('aria-pressed')).toBe('true')
+  it('Quick is the default tab; Price has no question field', () => {
+    render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={vi.fn()} cournot={{ resolve: vi.fn(async () => ({ markets: [] })), probability: vi.fn() }} />)
+    expect(screen.getByRole('button', { name: 'Quick' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Price' }))
     expect(screen.queryByLabelText('Question')).toBeNull()
     expect(screen.getByLabelText(/Strike/)).toBeTruthy()
   })

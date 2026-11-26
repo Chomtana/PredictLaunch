@@ -36,7 +36,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     uint256 public constant SHARE_UNIT = 1e16;
     uint256 public constant SNAP_TOLERANCE = 5;
     uint256 public constant GRACE = 60;
-    uint256 public constant MIN_DURATION = 300;
+    uint256 public constant MIN_DURATION = 60;
     uint256 public constant MAX_DURATION = 30 days;
     uint256 public constant LOSER_SUPPLY = 500_000_000e18;
     /// @notice A question launch with no proposal by `settleTime + QUESTION_DEADLINE` resolves Void.
@@ -197,12 +197,15 @@ contract Exchange is Ownable, ReentrancyGuard {
     /// @notice Time a resolver proposal waits before `resolve` accepts it (owner-settable, <= 7 days).
     uint64 public challengeWindow;
     mapping(uint256 id => QuestionView) internal _questions;
+    /// @notice Factories besides `factory` that may register launches (the OpenFour rail registers its own).
+    mapping(address => bool) public extraFactory;
 
     // ---------------------------------------------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------------------------------------------
 
     event FactorySet(address factory);
+    event ExtraFactorySet(address factory, bool on);
     event OperatorSet(address op, bool on);
     event FeedSet(address feed, bool enabled);
     event MinTargetSet(uint256 minTarget);
@@ -322,6 +325,12 @@ contract Exchange is Ownable, ReentrancyGuard {
     function setFactory(address f) external onlyOwner {
         factory = f;
         emit FactorySet(f);
+    }
+
+    /// @notice Enable or disable an additional launch factory (`factory` stays the Flap one).
+    function setExtraFactory(address f, bool on) external onlyOwner {
+        extraFactory[f] = on;
+        emit ExtraFactorySet(f, on);
     }
 
     function setOperator(address op, bool on) external onlyOwner {
@@ -528,13 +537,14 @@ contract Exchange is Ownable, ReentrancyGuard {
     // Launches: registration, settlement snapshot, resolution
     // ---------------------------------------------------------------------------------------------------------
 
-    /// @notice Called by the factory inside `Portal.newLauncher`. `rail` is the launch's Flap Launcher and `token` the
-    ///         memecoin address its salt predicts.
+    /// @notice Called by a factory: the Flap factory inside `Portal.newLauncher` (`rail` is the launch's Flap Launcher
+    ///         and `token` the memecoin address its salt predicts), or an extra factory such as the OpenFour rail, which
+    ///         passes `token = address(0)`: the memecoin is created at graduation and recorded by `receiveLoserTokens`.
     function registerLaunch(address rail, address creator, address token, LaunchConfig calldata c)
         external
         returns (uint256 launchId)
     {
-        if (msg.sender != factory) revert NotFactory();
+        if (msg.sender != factory && !extraFactory[msg.sender]) revert NotFactory();
         uint256 qLen = bytes(c.question).length;
         if (qLen == 0) {
             // price launch (feed = 0 is reserved for question launches)
@@ -762,7 +772,9 @@ contract Exchange is Ownable, ReentrancyGuard {
         if (msg.sender != l.rail) revert NotRail();
         if (l.status != GRADUATED) revert NotGraduated();
         if (loserTokensIn[id]) revert LoserTokensAlreadyIn();
-        if (token != l.token || amount != LOSER_SUPPLY) revert BadToken();
+        if (amount != LOSER_SUPPLY || token == address(0)) revert BadToken();
+        if (l.token == address(0)) l.token = token; // created at graduation (OpenFour rail)
+        else if (token != l.token) revert BadToken();
         loserTokensIn[id] = true;
         uint256 before = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
