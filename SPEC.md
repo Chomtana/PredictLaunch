@@ -97,6 +97,8 @@ function deposit(uint256 amount) external payable;                   // native: 
 function requestWithdraw(uint256 amount) external returns (uint64 idx);
 function forceWithdraw(uint64 idx) external;                         // after FORCE_DELAY, if unprocessed
 function claimPayout() external;                                     // pulls `pendingPayout` when a push failed
+function spendable(address u) external view returns (uint256);       // balanceOf + (ERC20) min(wallet, allowance)
+function funds(address[] calldata users) external view returns (uint256[] memory); // spendable, batched
 
 // keys and onchain cancels
 function authorizeKey(address key, uint64 expiry) external;
@@ -194,7 +196,15 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 - Batch: `lastBatchTs ≤ ts ≤ block.timestamp`, `block.timestamp − ts ≤ MAX_LAG`; apply keys, then
   fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid `min(requested,
   balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any failed check
-  reverts the whole batch.
+  reverts the whole batch, except an unfunded payer (below).
+- Approve-only trading (ERC20 quote only; native mode keeps internal balances): a payer's cost is
+  taken from `balanceOf` first and the rest pulled from the wallet with `transferFrom` (the user
+  approves the Exchange once; no deposit needed). Every credit (Transfer seller, Merge, `redeem`) is
+  paid to the wallet (non-reverting transfer, `pendingPayout` on failure) instead of `balanceOf`, so
+  no withdraw is needed. Before a fill changes anything, each payer's `spendable` must cover its part
+  (both legs summed when one owner is on both); otherwise the fill is skipped with
+  `FillSkipped(batchId, index, user)` and the rest of the batch settles. The sequencer uses
+  `funds(users)` at the polled block as each user's confirmed balance and drops skipped fills.
 - Fill checks: both orders' signatures, not cancelled, `nonce ≥ minNonce[owner]`,
   `expiry ≥ ts`, same launch, `round == 0`, tradable at ts, `amount % 1e16 == 0`,
   `filled + amount ≤ order.amount` for both. Prices: maker gets exactly `pm`. Transfer: same
@@ -210,7 +220,8 @@ symbol, imageURI)`, `Snapshot(launchId, price, updatedAt)`, `SnapshotSource(laun
 indexed by the sequencer), `FallbackFeedSet(feed, fallbackFeed)`, `Resolved(launchId, outcome, pairs,
 raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`, `LaunchFailed(launchId)`,
 `Redeemed(launchId, user, credit, loserShares)`, `TokensClaimed(launchId, user, amount)`,
-`BatchSubmitted(batchId, ts, fills)`, `Trade(launchId, takerHash, makerHash, kind, makerPrice,
+`BatchSubmitted(batchId, ts, fills)`, `FillSkipped(batchId, index, user)` (ERC20 quote, emitted before
+its batch's `BatchSubmitted`), `Trade(launchId, takerHash, makerHash, kind, makerPrice,
 amount)`.
 
 ### Question launches (Cournot) — added 2026-11-26, user's decision
