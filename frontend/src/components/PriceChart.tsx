@@ -134,7 +134,7 @@ export function PriceChart({ feed, strike, settleTime }: { feed: Address; strike
           lineWidth: 1,
           lineStyle: LineStyle.LargeDashed,
           axisLabelVisible: true,
-          title: 'Oracle',
+          title: 'Atlas Oracle',
         })
     }
     const push = (t: number, price: bigint) => {

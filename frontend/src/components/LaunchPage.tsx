@@ -6,6 +6,7 @@ import { midUp } from '../lib/market.ts'
 import { fmtPrice } from '../lib/units.ts'
 import { useApp } from '../state.tsx'
 import { phaseOf } from './LaunchCard.tsx'
+import { venueOf } from '../lib/venue.ts'
 import { LaunchProgress } from './LaunchProgress.tsx'
 import { OrderBook } from './OrderBook.tsx'
 import { Positions } from './Positions.tsx'
@@ -117,6 +118,7 @@ export function LaunchPage({ id }: { id: number }) {
   const labels = labelsFor(l)
   const yesMid = midUp(b)
   const qText = l.question || `Question #${id}`
+  const venue = venueOf(l.rail, config)
 
   return (
     <div className="page">
@@ -131,6 +133,7 @@ export function LaunchPage({ id }: { id: number }) {
               settleTime={settleTime}
               phase={phase}
               now={now}
+              venue={venue}
               yesMid={yesMid}
             />
           ) : (
@@ -146,6 +149,7 @@ export function LaunchPage({ id }: { id: number }) {
             settlePrice={l.snapped ? big(l.settlePrice) : null}
             phase={phase}
             now={now}
+            venue={venue}
           />
           )}
           {settled && <OutcomePanel l={l} phase={phase} mine={mine} />}

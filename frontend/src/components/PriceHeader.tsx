@@ -2,7 +2,8 @@ import { asset, countdown, pad2, settleLabel } from '../lib/format.ts'
 import { fmtPrice, fmtUsd, num18 } from '../lib/units.ts'
 import type { Phase } from './LaunchCard.tsx'
 import { AssetBadge, CoinAvatar, Spinner } from './ui.tsx'
-import { StatusChip } from './LaunchCard.tsx'
+import { StatusChip, VenueChip } from './LaunchCard.tsx'
+import type { Venue } from '../lib/venue.ts'
 
 /** "Will BTC be ≥ $100,000 at Nov 26, 12:00?" */
 export const question = (feedSym: string, strike: bigint, settleTime: number) => `Will ${asset(feedSym)} be ≥ ${fmtPrice(strike)} at ${settleLabel(settleTime)}?`
@@ -20,6 +21,7 @@ export function PriceHeader(p: {
   settlePrice: bigint | null
   phase: Phase
   now: number
+  venue: Venue
 }) {
   const left = p.settleTime - p.now
   const cd = countdown(left)
@@ -41,6 +43,7 @@ export function PriceHeader(p: {
               <AssetBadge asset={coin} size={16} /> {p.feedSym || coin} oracle
             </span>
             <StatusChip phase={p.phase} />
+            <VenueChip venue={p.venue} />
           </div>
         </div>
       </div>
@@ -92,6 +95,7 @@ export function QuestionHeader(p: {
   settleTime: number
   phase: Phase
   now: number
+  venue: Venue
   /** YES mid on the book, cents */
   yesMid: number | null
 }) {
@@ -110,6 +114,7 @@ export function QuestionHeader(p: {
             <span>·</span>
             <span>Cournot question · settles {settleLabel(p.settleTime)}</span>
             <StatusChip phase={p.phase} />
+            <VenueChip venue={p.venue} />
           </div>
         </div>
       </div>

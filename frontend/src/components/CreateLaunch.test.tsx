@@ -96,4 +96,29 @@ describe('CreateLaunchForm', () => {
     expect(cfg.target).toBe(215n * 10n ** 16n)
     expect(Number(cfg.settleTime)).toBeGreaterThan(Date.now() / 1000 + 300)
   })
+
+  it('Quick tab shows the Flap / Four.meme picker, Flap by default', () => {
+    const onVenue = vi.fn()
+    const cournot = { resolve: vi.fn(() => new Promise<never>(() => {})), probability: vi.fn() }
+    render(
+      <CreateLaunchForm
+        config={{ ...config, fourRail: '0x00000000000000000000000000000000000F0047' }}
+        priceOf={priceOf}
+        quoteUsd={600n * E18}
+        connected
+        onSubmit={vi.fn()}
+        onVenue={onVenue}
+        cournot={cournot as never}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Quick' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Flap' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Four.meme' }))
+    expect(onVenue).toHaveBeenCalledWith('four')
+  })
+
+  it('no picker without a Four rail', () => {
+    render(<CreateLaunchForm config={config} priceOf={priceOf} quoteUsd={600n * E18} connected onSubmit={vi.fn()} onVenue={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Four.meme' })).toBeNull()
+  })
 })

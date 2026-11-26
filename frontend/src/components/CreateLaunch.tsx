@@ -66,9 +66,11 @@ interface FormProps {
   cournot?: CournotClient
   /** Where the coin graduates (default Flap). */
   venue?: Venue
+  /** Shows the "Launch on" Flap / Four.meme picker under the tabs (when the sequencer has a Four rail). */
+  onVenue?: (v: Venue) => void
 }
 
-export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot, venue = 'flap' }: FormProps) {
+export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot, venue = 'flap', onVenue }: FormProps) {
   const vName = VENUE_NAME[venue]
   const [kind, setKind] = useState<'quick' | 'price' | 'question'>('quick')
   const isQ = kind === 'question'
@@ -223,12 +225,28 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
       ))}
     </div>
   )
+  const venuePick = onVenue && fourEnabled(config) && (
+    <div className="field venue-pick">
+      <span className="field-label">Launch on</span>
+      <div className="seg" role="group" aria-label="Launch on">
+        {(['flap', 'four'] as const).map((v) => (
+          <button type="button" key={v} aria-pressed={venue === v} className={venue === v ? 'on' : ''} onClick={() => onVenue(v)}>
+            {VENUE_NAME[v]}
+          </button>
+        ))}
+      </div>
+      <span className="field-hint">
+        Same mechanism on both: at graduation the cut seeds a PancakeSwap pool with 500M tokens and losers claim the other 500M.
+      </span>
+    </div>
+  )
 
   if (kind === 'quick')
     return (
       <div className="panel create-form quick-page">
         <h2>Create a launch</h2>
         {tabs}
+        {venuePick}
         <QuickLaunches config={config} priceOf={priceOf} connected={connected} busy={busy} cournot={cournot} onSubmit={onSubmit} />
       </div>
     )
@@ -244,6 +262,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
       >
         <h2>Create a launch</h2>
         {tabs}
+        {venuePick}
         {isQ ? (
           <p className="muted lead">
             Launch a memecoin on a yes/no question. Traders bet YES or NO; the Cournot oracle supplies the odds and the settlement evidence. If the pool
@@ -517,23 +536,9 @@ export function CreateLaunch() {
           </button>
         </div>
       )}
-      {fourEnabled(config) && (
-        <div className="field venue-pick">
-          <span className="field-label">Launch on</span>
-          <div className="seg" role="group" aria-label="Launch on">
-            {(['flap', 'four'] as const).map((v) => (
-              <button type="button" key={v} aria-pressed={venue === v} className={venue === v ? 'on' : ''} onClick={() => setVenue(v)}>
-                {VENUE_NAME[v]}
-              </button>
-            ))}
-          </div>
-          <span className="field-hint">
-            Same mechanism on both: at graduation the cut seeds a PancakeSwap pool with 500M tokens and losers claim the other 500M.
-          </span>
-        </div>
-      )}
       <CreateLaunchForm
         venue={venue}
+        onVenue={setVenue}
         config={config}
         priceOf={priceOf}
         quoteUsd={quoteUsd}

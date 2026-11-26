@@ -3,6 +3,7 @@ import { n } from '../lib/api.ts'
 import { useApp } from '../state.tsx'
 import { LaunchCard, phaseOf, type Phase } from './LaunchCard.tsx'
 import { Spinner, useNow } from './ui.tsx'
+import { venueLead } from '../lib/venue.ts'
 
 const FILTERS: [string, (p: Phase) => boolean][] = [
   ['All', () => true],
@@ -15,13 +16,15 @@ export function Home() {
   const { launches, config, configError } = useApp()
   const now = useNow(1000)
   const [filter, setFilter] = useState(0)
-  const list = (launches ?? [])
+  const sorted = (launches ?? [])
     .filter((l) => FILTERS[filter][1](phaseOf(l, now)))
     .sort((a, b) => {
       const pa = phaseOf(a, now) === 'live' ? 0 : 1
       const pb = phaseOf(b, now) === 'live' ? 0 : 1
       return pa - pb || n(b.id) - n(a.id)
     })
+  // First row: 2 Flap launches, then 2 Four.meme launches.
+  const list = venueLead(sorted, config)
 
   return (
     <div className="page">

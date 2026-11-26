@@ -4,6 +4,7 @@ import { fmtPrice, usd, fmtAmt } from '../lib/units.ts'
 import { useApp, useQuote } from '../state.tsx'
 import { AssetBadge, CoinAvatar, ProgressBar } from './ui.tsx'
 import { labelsFor } from '../lib/labels.ts'
+import { VENUE_NAME, venueOf, type Venue } from '../lib/venue.ts'
 
 export type Phase = 'live' | 'settling' | 'graduating' | 'graduated' | 'failed' | 'void'
 
@@ -33,6 +34,15 @@ export function StatusChip({ phase }: { phase: Phase }) {
   )
 }
 
+/** Where the coin is minted at graduation: Flap or Four.meme. */
+export function VenueChip({ venue }: { venue: Venue }) {
+  return (
+    <span className={`venue-chip ${venue}`} title={`Coin launches on ${VENUE_NAME[venue]} at graduation`}>
+      {VENUE_NAME[venue]}
+    </span>
+  )
+}
+
 /** "BTC ≥ $100,000 by Nov 26 12:00", or a question launch's question. */
 export function questionShort(l: LaunchSummary, feedSym: string) {
   if (labelsFor(l).kind === 'question') return l.question || `Question #${l.id}`
@@ -40,7 +50,7 @@ export function questionShort(l: LaunchSummary, feedSym: string) {
 }
 
 export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
-  const { feedSymbol, quoteUsd, priceOf } = useApp()
+  const { feedSymbol, quoteUsd, priceOf, config } = useApp()
   const { symbol: q } = useQuote()
   const sym = feedSymbol(l.feed)
   const phase = phaseOf(l, now)
@@ -110,9 +120,12 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
         </div>
         <ProgressBar value={prog} glow={phase === 'graduated'} />
         <div className="lc-foot">
-          <span className="cut-badge">{n(l.cutBps) / 100}% cut</span>
+          <span className="lc-badges">
+            <span className="cut-badge">{n(l.cutBps) / 100}% cut</span>
+            <VenueChip venue={venueOf(l.rail, config)} />
+          </span>
           <span className="muted small">
-            {phase === 'live' ? <>settles in {duration(left)}</> : phase === 'settling' ? 'settling…' : phase === 'graduated' ? 'trading on PancakeSwap' : PHASE_LABEL[phase]}
+            {phase === 'live' ? <>settles in {duration(left)}</> : phase === 'settling' ? 'settling…' : PHASE_LABEL[phase]}
           </span>
         </div>
       </div>
