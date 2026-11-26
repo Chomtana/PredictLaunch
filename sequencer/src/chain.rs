@@ -7,7 +7,7 @@
 //! log's data. `BatchSubmitted` logs are completed with the decoded `submitBatch` calldata of their
 //! transaction, so the mirror can be rebuilt from the chain alone.
 
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 
 use alloy::consensus::Transaction as _;
 use alloy::dyn_abi::{DynSolType, DynSolValue};
@@ -356,6 +356,63 @@ pub struct RpcChain {
     /// `FourRail.graduate` with the operator key's signature (the operator is `Core.signer` on our fork).
     pub four_rail: Address,
     signer: PrivateKeySigner,
+    /// One operator tx at a time (batch, keeper and oracle loops share the key): the nonce is read
+    /// from `latest` while holding it, so it is never ahead of the chain.
+    send_lock: tokio::sync::Mutex<()>,
+    /// submitBatch calldata by tx hash, persisted (`with_batch_cache`) so a restart's replay does not
+    /// refetch every batch tx.
+    batch_cache: Option<BatchCache>,
+}
+
+/// Append-only `<tx hash> <calldata hex>` lines. A tx hash commits to its input, so an entry is
+/// right on any chain or fork and never goes stale; a reorged-out tx is simply never asked for.
+struct BatchCache {
+    path: std::path::PathBuf,
+    map: std::sync::Mutex<std::collections::HashMap<B256, Bytes>>,
+}
+
+impl BatchCache {
+    fn load(path: std::path::PathBuf) -> anyhow::Result<Self> {
+        let mut map = std::collections::HashMap::new();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                for line in text.lines() {
+                    // A torn last line (crash mid-write) is skipped and refetched.
+                    let mut it = line.split_whitespace();
+                    if let (Some(h), Some(d), None) = (it.next(), it.next(), it.next()) {
+                        if let (Ok(h), Ok(d)) = (h.parse::<B256>(), d.parse::<Bytes>()) {
+                            map.insert(h, d);
+                        }
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+        Ok(Self {
+            path,
+            map: std::sync::Mutex::new(map),
+        })
+    }
+
+    fn get(&self, h: &B256) -> Option<Bytes> {
+        self.map.lock().unwrap().get(h).cloned()
+    }
+
+    fn put(&self, h: B256, input: Bytes) {
+        use std::io::Write as _;
+        let mut map = self.map.lock().unwrap();
+        // Written under the lock: concurrent lookups never interleave lines.
+        let res = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .and_then(|mut f| writeln!(f, "{h} {input}"));
+        if let Err(e) = res {
+            tracing::warn!("batch cache {}: {e}", self.path.display());
+        }
+        map.insert(h, input);
+    }
 }
 
 /// How long a Four create signature stays valid (`CreateTokenArgs.validTimestamp`).
@@ -367,6 +424,12 @@ const GAS_PRICE: u128 = 100_000_000;
 
 /// How long a sent tx may take to be mined before it counts as dropped.
 const RECEIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Receipt poll interval (alloy's remote default is 7 s).
+const RECEIPT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Batch tx lookups in flight at once while reading events.
+const BATCH_TX_CONCURRENCY: usize = 16;
 
 /// Max blocks per `eth_getLogs`.
 const LOG_CHUNK: u64 = 2_000;
@@ -387,6 +450,9 @@ impl RpcChain {
             .wallet(EthereumWallet::from(signer.clone()))
             .connect_http(rpc_url.parse().context("bad rpc url")?)
             .erased();
+        // alloy polls a remote RPC for receipts every 7 s by default, which ages every batch ~10 s
+        // toward MAX_LAG (15 s) before it confirms. BSC testnet makes a block every ~0.75 s.
+        provider.client().set_poll_interval(RECEIPT_POLL);
         Ok(Self {
             provider,
             exchange,
@@ -394,7 +460,18 @@ impl RpcChain {
             operator,
             four_rail: Address::ZERO,
             signer,
+            send_lock: tokio::sync::Mutex::new(()),
+            batch_cache: None,
         })
+    }
+
+    /// Keep batch calldata in `path` across restarts (see `BatchCache`).
+    pub fn with_batch_cache(mut self, path: std::path::PathBuf) -> anyhow::Result<Self> {
+        let cache = BatchCache::load(path)?;
+        let n = cache.map.lock().unwrap().len();
+        tracing::info!("batch cache {}: {n} batches", cache.path.display());
+        self.batch_cache = Some(cache);
+        Ok(self)
     }
 
     /// Graduate Four launches (those whose rail is `rail`) through the OpenFour rail.
@@ -475,12 +552,26 @@ impl RpcChain {
             .with_to(to)
             .with_input(call.abi_encode())
             .with_gas_price(GAS_PRICE);
-        // Simulate first so a revert comes back as an error instead of a failed receipt.
-        self.provider
-            .call(tx.clone())
-            .block(BlockId::pending())
-            .await
-            .with_context(|| format!("{} would revert", C::SIGNATURE))?;
+        // Nothing here reads the `pending` block: some BSC testnet RPCs stamp it ~12 s in the future
+        // (failing MAX_LAG / timing checks the mined tx passes) and report a pending nonce ahead of
+        // the chain (txs behind a nonce gap that never mine). So nonce and gas come from `latest`,
+        // set explicitly so alloy's fillers (which use `pending`) leave them alone.
+        let _g = self.send_lock.lock().await;
+        // The estimate doubles as the simulation: a revert comes back as an error, not a failed
+        // receipt. Both reads at once: each RPC round trip is ~1 s on some testnet endpoints, and a
+        // batch must land within MAX_LAG (15 s) of its timestamp.
+        let (gas, nonce) = tokio::join!(
+            self.provider
+                .estimate_gas(tx.clone())
+                .block(BlockId::latest())
+                .into_future(),
+            self.provider
+                .get_transaction_count(self.operator)
+                .block_id(BlockId::latest())
+                .into_future()
+        );
+        let gas = gas.with_context(|| format!("{} would revert", C::SIGNATURE))?;
+        let tx = tx.with_nonce(nonce?).with_gas_limit(gas + gas / 4);
         let pending = self.provider.send_transaction(tx).await?;
         let hash = *pending.tx_hash();
         // An RPC can accept a tx and then drop it; without a deadline the batch / keeper loop would
@@ -504,9 +595,18 @@ impl RpcChain {
     }
 
     async fn batch_of_tx(&self, tx: B256) -> Option<abi::Batch> {
+        if let Some(input) = self.batch_cache.as_ref().and_then(|c| c.get(&tx)) {
+            if let Ok(c) = IExchange::submitBatchCall::abi_decode(&input) {
+                return Some(c.b);
+            }
+        }
         let t = self.provider.get_transaction_by_hash(tx).await.ok()??;
         let input: Bytes = t.input().clone();
-        IExchange::submitBatchCall::abi_decode(&input).ok().map(|c| c.b)
+        let b = IExchange::submitBatchCall::abi_decode(&input).ok().map(|c| c.b)?;
+        if let Some(c) = &self.batch_cache {
+            c.put(tx, input);
+        }
+        Some(b)
     }
 }
 
@@ -514,6 +614,8 @@ impl Chain for RpcChain {
     async fn poll_events(&self, from: u64) -> anyhow::Result<(Vec<ChainEvent>, u64)> {
         let head = self.provider.get_block_number().await?;
         let mut out = Vec::new();
+        // (index in `out`, tx hash) of each BatchSubmitted: their calldata is fetched at the end.
+        let mut batch_txs: Vec<(usize, B256)> = Vec::new();
         let mut from = from;
         while from <= head {
             let to = head.min(from + LOG_CHUNK - 1);
@@ -544,15 +646,14 @@ impl Chain for RpcChain {
                         fills,
                         ..
                     }) => {
-                        let batch = match log.transaction_hash {
-                            Some(h) => self.batch_of_tx(h).await,
-                            None => None,
-                        };
+                        if let Some(h) = log.transaction_hash {
+                            batch_txs.push((out.len(), h));
+                        }
                         out.push(ChainEvent::BatchSubmitted {
                             batch_id,
                             ts,
                             fills,
-                            batch,
+                            batch: None,
                         });
                     }
                     Some(e) => out.push(e),
@@ -568,20 +669,26 @@ impl Chain for RpcChain {
             }
             from = to + 1;
         }
+        // One tx lookup per batch, concurrently (and from the cache when it has them): on startup the
+        // replay covers every batch since the deployment, and one at a time (~1 s each on some
+        // testnet RPCs) outgrew the startup wait.
+        use futures_util::StreamExt;
+        let fetched: Vec<(usize, Option<abi::Batch>)> = futures_util::stream::iter(batch_txs)
+            .map(|(i, h)| async move { (i, self.batch_of_tx(h).await) })
+            .buffer_unordered(BATCH_TX_CONCURRENCY)
+            .collect()
+            .await;
+        for (i, b) in fetched {
+            if let ChainEvent::BatchSubmitted { batch, .. } = &mut out[i] {
+                *batch = b;
+            }
+        }
         Ok((out, from))
     }
 
-    async fn simulate_batch(&self, b: &abi::Batch) -> anyhow::Result<()> {
-        let call = IExchange::submitBatchCall { b: b.clone() };
-        let tx = TransactionRequest::default()
-            .with_from(self.operator)
-            .with_to(self.exchange)
-            .with_input(call.abi_encode());
-        self.provider
-            .call(tx)
-            .block(BlockId::pending())
-            .await
-            .context("submitBatch would revert")?;
+    async fn simulate_batch(&self, _b: &abi::Batch) -> anyhow::Result<()> {
+        // `submit_batch` simulates through its gas estimate (at `latest`, see `send_to`); a separate
+        // call here would only add an RPC round trip to the batch's age.
         Ok(())
     }
 

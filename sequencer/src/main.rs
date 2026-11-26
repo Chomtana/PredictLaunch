@@ -68,6 +68,10 @@ struct Args {
     /// Where oracle records are kept (launch-<id>.json, price-<id>.json, settle-<id>.json, previews).
     #[arg(long, env = "PREDICTLAUNCH_ORACLE_DIR", default_value = oracle::DEFAULT_ORACLE_DIR)]
     oracle_dir: std::path::PathBuf,
+    /// File that keeps submitBatch calldata across restarts, so the startup replay does not refetch
+    /// every batch tx. Unset: no cache.
+    #[arg(long, env = "PREDICTLAUNCH_BATCH_CACHE")]
+    batch_cache: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -78,8 +82,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let chain = RpcChain::new(&args.rpc, args.exchange, args.portal, &args.operator_key)?
+    let mut chain = RpcChain::new(&args.rpc, args.exchange, args.portal, &args.operator_key)?
         .with_four_rail(args.four_rail);
+    if let Some(path) = &args.batch_cache {
+        chain = chain.with_batch_cache(path.clone())?;
+    }
     let operator = chain.operator;
     let start_block = match args.start_block {
         Some(b) => b,

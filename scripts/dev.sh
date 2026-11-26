@@ -132,7 +132,7 @@ grep -q 'feed-relay: ready' "$DEV/feed-relay.log" || fail "feed relay" "$DEV/fee
 step "starting sequencer on $API (batch every ${BATCH_MS} ms)"
 RUST_LOG="${RUST_LOG:-info}" "$SEQ_BIN" --rpc "$RPC" --exchange "$EXCHANGE" --factory "$FACTORY" --four-rail "$FOUR_RAIL" \
   --operator-key "$OP_KEY" --port "$SEQ_PORT" --batch-ms "$BATCH_MS" --dev-faucet --start-block "$START_BLOCK" \
-  --quote-symbol "$QUOTE_SYMBOL" --oracle-dir "$DEV/oracle" \
+  --quote-symbol "$QUOTE_SYMBOL" --oracle-dir "$DEV/oracle" --batch-cache "$DEV/batch-cache.txt" \
   >"$DEV/sequencer.log" 2>&1 &
 SEQ_PID=$!
 PIDS+=($SEQ_PID)
