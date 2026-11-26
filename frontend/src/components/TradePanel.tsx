@@ -227,7 +227,7 @@ export function TradePanel(p: TradePanelProps) {
               <div>
                 <div className="muted small">To win</div>
                 <div className="muted small">
-                  {fmtShares(amount)} shares · cost {fmtBnb(spend, 4)} {q}
+                  {fmtShares(amount)} shares
                 </div>
               </div>
               <span className="big">{fmtBnb(win, 2)} {q}</span>

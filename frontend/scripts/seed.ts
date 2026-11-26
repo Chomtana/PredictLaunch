@@ -146,22 +146,33 @@ async function createAll(): Promise<Mkt[]> {
   return out
 }
 
-/** Maker ladder: 3 levels on each side around the fair price (Up bids + Down bids = Up asks). */
+/**
+ * A winning share pays 1 − cut, so neither side is worth more than (100 − cut)¢: an Up price p is a Down
+ * price 100 − p, which keeps every quote inside [cut, 100 − cut]¢.
+ */
+function band(m: Mkt): [number, number] {
+  const lo = Math.ceil(m.cutBps / 100)
+  return [lo, 100 - lo]
+}
+
+/** Maker ladder: 3 levels on each side around the fair price (Up bids + Down bids = Up asks), inside the band. */
 async function quote(maker: Bot, m: Mkt, fair: number) {
   await S.cancelAll(maker, m.id)
+  const [lo, hi] = band(m)
   for (let i = 0; i < 3; i++) {
     const bid = fair - 1 - i * 2
     const ask = fair + 1 + i * 2
     const size = shares(rnd(2, 5))
-    if (bid >= 1) await S.place(maker, m.id, 0, 0, bid, size, { expiry: m.settleTime })
-    if (ask <= 99) await S.place(maker, m.id, 1, 0, 100 - ask, size, { expiry: m.settleTime })
+    if (bid >= lo && bid <= hi) await S.place(maker, m.id, 0, 0, bid, size, { expiry: m.settleTime })
+    if (ask >= lo && ask <= hi) await S.place(maker, m.id, 1, 0, 100 - ask, size, { expiry: m.settleTime })
   }
 }
 
 /** A taker crosses the maker's quote: buying Up or Down mints new pairs. */
 async function take(taker: Bot, m: Mkt, fair: number) {
   const up = Math.random() < 0.5
-  const px = up ? Math.min(99, fair + 3) : Math.min(99, 100 - fair + 3)
+  const hi = band(m)[1]
+  const px = Math.min(hi, up ? fair + 3 : 100 - fair + 3)
   const r = await S.place(taker, m.id, up ? 0 : 1, 0, px, shares(rnd(0.5, 2.5)), { ioc: true })
   return r.fills.reduce((s, f) => s + BigInt(f.amount), 0n)
 }
