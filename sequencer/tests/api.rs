@@ -428,3 +428,21 @@ async fn user_view_lists_trading_keys() {
     let u = t.get(&format!("/api/user/{owner}")).await;
     assert_eq!(u["keys"], json!([{"key": key, "expiry": 4_000_000_000u64}]));
 }
+
+#[tokio::test]
+async fn erc20_wallet_funds_drive_balance() {
+    let t = T::with_quote(false, Address::repeat_byte(0x55), Some("USDT")).await;
+    let carol = Address::repeat_byte(0xCA);
+    // Carol only approved: no Exchange events. Her first user view watches her.
+    let v = t.get(&format!("/api/user/{carol}")).await;
+    assert_eq!(v["balance"], "0");
+    let mut funds = std::collections::HashMap::new();
+    funds.insert(carol, U256::from(7 * E18));
+    funds.insert(t.alice.address(), U256::from(3 * E18));
+    t.app.chain.0.lock().unwrap().funds = Some(funds);
+    t.app.poll().await.unwrap();
+    let v = t.get(&format!("/api/user/{carol}")).await;
+    assert_eq!(v["balance"], (7 * E18).to_string());
+    let v = t.get(&format!("/api/user/{}", t.alice.address())).await;
+    assert_eq!(v["balance"], (3 * E18).to_string(), "wallet funds replace the event balance");
+}

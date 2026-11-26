@@ -63,6 +63,13 @@ pub trait Chain: Send + Sync + 'static {
         outcome: u8,
         evidence_hash: B256,
     ) -> impl Future<Output = anyhow::Result<B256>> + Send;
+    /// `Exchange.funds(users)` at `block` (ERC20 quote: internal balance + min(wallet, allowance)).
+    /// `None` = not available (the caller keeps event-derived balances).
+    fn read_funds(
+        &self,
+        users: Vec<Address>,
+        block: u64,
+    ) -> impl Future<Output = anyhow::Result<Option<Vec<U256>>>> + Send;
     /// `latestRoundData()` → (answer, updatedAt).
     fn read_feed(&self, feed: Address) -> impl Future<Output = anyhow::Result<(U256, u64)>> + Send;
     /// Dev faucet: `anvil_setBalance`.
@@ -111,6 +118,7 @@ const EVENTS: &[EventDef] = &[
     EventDef { name: "Redeemed", params: &["uint256", "address", "uint256", "uint256"] },
     EventDef { name: "TokensClaimed", params: &["uint256", "address", "uint256"] },
     EventDef { name: "BatchSubmitted", params: &["uint64", "uint64", "uint256"] },
+    EventDef { name: "FillSkipped", params: &["uint64", "uint256", "address"] },
     EventDef { name: "QuestionSet", params: &["uint256", "string", "uint256"] },
     EventDef {
         name: "OutcomeProposed",
@@ -241,6 +249,11 @@ pub fn decode_log(topics: &[B256], data: &[u8], block_ts: u64) -> Option<ChainEv
     use ChainEvent as E;
     Some(match def.name {
         "Deposited" => E::Deposited { user: addr(&p[0]), amount: u256(&p[1]) },
+        "FillSkipped" => E::FillSkipped {
+            batch_id: u64v(&p[0]),
+            index: u64v(&p[1]),
+            user: addr(&p[2]),
+        },
         "WithdrawRequested" => E::WithdrawRequested {
             idx: u64v(&p[0]),
             user: addr(&p[1]),
@@ -519,6 +532,18 @@ impl Chain for RpcChain {
         self.send(IExchange::submitBatchCall { b: b.clone() }).await
     }
 
+    async fn read_funds(&self, users: Vec<Address>, block: u64) -> anyhow::Result<Option<Vec<U256>>> {
+        let n = users.len();
+        let call = IExchange::fundsCall { users };
+        let tx = TransactionRequest::default()
+            .with_to(self.exchange)
+            .with_input(call.abi_encode());
+        let out = self.provider.call(tx).block(BlockId::number(block)).await?;
+        let v = IExchange::fundsCall::abi_decode_returns(&out)?;
+        anyhow::ensure!(v.len() == n, "funds() returned {} values for {n} users", v.len());
+        Ok(Some(v))
+    }
+
     async fn snapshot(&self, launch: u64) -> anyhow::Result<B256> {
         self.send(IExchange::snapshotCall {
             launchId: U256::from(launch),
@@ -638,6 +663,7 @@ mod tests {
         assert_eq!(get("Redeemed"), IExchange::Redeemed::SIGNATURE_HASH);
         assert_eq!(get("BatchSubmitted"), IExchange::BatchSubmitted::SIGNATURE_HASH);
         assert_eq!(get("WithdrawPaid"), IExchange::WithdrawPaid::SIGNATURE_HASH);
+        assert_eq!(get("FillSkipped"), IExchange::FillSkipped::SIGNATURE_HASH);
         assert_eq!(get("QuestionSet"), IExchange::QuestionSet::SIGNATURE_HASH);
         assert_eq!(get("OutcomeProposed"), IExchange::OutcomeProposed::SIGNATURE_HASH);
         assert_eq!(get("ChallengeWindowSet"), IExchange::ChallengeWindowSet::SIGNATURE_HASH);

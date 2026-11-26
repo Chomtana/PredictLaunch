@@ -526,3 +526,68 @@ fn trading_key_authorized_in_batch() {
         ErrorCode::KeyExpired
     );
 }
+
+#[test]
+fn fill_skipped_onchain_is_not_settled() {
+    let mut w = W::new(2000);
+    let (alice, bob, carol) = (w.alice.clone(), w.bob.clone(), w.carol.clone());
+    // fill 0: bob x alice (mint), fill 1: carol x alice's second order (mint)
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    w.place(&carol, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    let b = w.s.cut(ms(T0 + 3)).unwrap();
+    assert_eq!(b.fills.len(), 2);
+    w.s.apply_events(
+        vec![
+            ChainEvent::FillSkipped {
+                batch_id: 1,
+                index: 0,
+                user: bob.address(),
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 1,
+                ts: b.ts,
+                fills: 2,
+                batch: Some(b),
+            },
+        ],
+        ms(T0 + 4),
+    );
+    assert_eq!(w.s.pending_fills(), 0);
+    assert_eq!(w.s.confirmed.pairs(0), E18, "only the second fill settled");
+    assert_eq!(w.s.confirmed.balance(bob.address()), U256::from(100 * E18));
+    assert_eq!(w.s.confirmed.balance(carol.address()), U256::from(996 * E18 / 10));
+    assert_eq!(w.s.confirmed.shares(0, alice.address(), Up), E18);
+    assert_eq!(w.s.trades.len(), 1);
+}
+
+#[test]
+fn funds_snapshot_overrides_balance_and_enforces_locks() {
+    let mut w = W::new(2000);
+    let alice = w.alice.clone();
+    let a = alice.address();
+    let mut hashes = vec![];
+    for p in [10u8, 20, 30] {
+        let r = w.place(&alice, 0, Up, Buy, p, 3000 * E18 / p as u128, T0).unwrap();
+        hashes.push(r.order_hash.unwrap());
+    }
+    // Alice moved funds out of her wallet: only 40 left spendable.
+    w.s.apply_poll(vec![], Some(vec![(a, U256::from(40 * E18))]), ms(T0 + 1));
+    assert_eq!(w.s.confirmed.balance(a), U256::from(40 * E18));
+    assert_eq!(w.s.ledger.balance(a), U256::from(40 * E18));
+    let book = &w.s.books[&0];
+    assert!(book.contains(&hashes[0]));
+    assert!(!book.contains(&hashes[1]));
+    assert!(!book.contains(&hashes[2]));
+    // A new wallet user shows up through the watch list.
+    let z = Address::repeat_byte(0x5A);
+    w.s.watch(z);
+    assert!(w.s.tracked_users().contains(&z));
+    assert!(w.s.tracked_users().contains(&a));
+    w.s.apply_poll(vec![], Some(vec![(z, U256::from(7 * E18))]), ms(T0 + 2));
+    assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
+    // No funds read (native quote): balances untouched.
+    w.s.apply_poll(vec![], None, ms(T0 + 3));
+    assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
+}

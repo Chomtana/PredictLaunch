@@ -35,6 +35,8 @@ pub struct Inner {
     pub resolver: Option<Address>,
     /// Make `propose_outcome` fail.
     pub fail_propose: bool,
+    /// `read_funds` answers from this map (missing user = 0) when set; `None` = not available.
+    pub funds: Option<HashMap<Address, U256>>,
 }
 
 /// `info().operator` of the fake chain.
@@ -137,6 +139,15 @@ impl Chain for FakeChain {
             .get(&feed)
             .copied()
             .ok_or_else(|| anyhow::anyhow!("unknown feed"))
+    }
+    async fn read_funds(&self, users: Vec<Address>, _block: u64) -> anyhow::Result<Option<Vec<U256>>> {
+        let i = self.0.lock().unwrap();
+        Ok(i.funds.as_ref().map(|m| {
+            users
+                .iter()
+                .map(|u| m.get(u).copied().unwrap_or_default())
+                .collect()
+        }))
     }
     async fn set_balance(&self, who: Address, amount: U256) -> anyhow::Result<()> {
         self.0.lock().unwrap().balances.insert(who, amount);

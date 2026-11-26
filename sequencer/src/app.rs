@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use alloy_primitives::{Address, B256, U256};
 use anyhow::Context;
-use predictlaunch_core::state::{AcceptError, Config, Msg, MsgResult, State};
+use predictlaunch_core::state::{AcceptError, ChainEvent, Config, Msg, MsgResult, State};
 use predictlaunch_core::{Domain, BNB_USD_FEED, FEEDS};
 use tokio::sync::{broadcast, watch};
 
@@ -64,6 +64,8 @@ pub struct App<C: Chain> {
     /// Cournot client, oracle files and caches (question launches).
     pub oracle: crate::oracle::Oracle,
     backoff: Mutex<HashMap<KeeperAction, u64>>,
+    /// `Exchange.funds` failed once (logged once, not every poll).
+    funds_warned: std::sync::atomic::AtomicBool,
 }
 
 pub fn now_ms() -> u64 {
@@ -99,6 +101,7 @@ impl<C: Chain> App<C> {
             batch_lock: tokio::sync::Mutex::new(()),
             keeper_lock: tokio::sync::Mutex::new(()),
             backoff: Mutex::new(HashMap::new()),
+            funds_warned: std::sync::atomic::AtomicBool::new(false),
         });
         app.poll().await.context("replaying Exchange events")?;
         Ok(app)
@@ -122,19 +125,56 @@ impl<C: Chain> App<C> {
         let from = *self.next_block.lock().unwrap();
         let (events, next) = self.chain.poll_events(from).await?;
         let n = events.len();
-        {
+        let funds = self.read_funds(&events, next.saturating_sub(1)).await;
+        let changed = {
             let mut nb = self.next_block.lock().unwrap();
             if *nb != from {
                 // Another poll raced us and already applied this range.
                 return Ok(0);
             }
             *nb = next;
-            self.state.lock().unwrap().apply_events(events, now_ms());
-        }
-        if n > 0 {
+            let mut s = self.state.lock().unwrap();
+            let before = s.confirmed.balances.clone();
+            s.apply_poll(events, funds, now_ms());
+            s.confirmed.balances != before
+        };
+        if n > 0 || changed {
             self.bump();
         }
         Ok(n)
+    }
+
+    /// ERC20 quote (approve-only trading): every tracked user's spendable funds at `block`. Users the
+    /// `events` introduce are included. `None` for a native quote or when the read fails.
+    async fn read_funds(&self, events: &[ChainEvent], block: u64) -> Option<Vec<(Address, U256)>> {
+        if self.info.quote_token.is_zero() {
+            return None;
+        }
+        let mut users = self.state.lock().unwrap().tracked_users();
+        for e in events {
+            match e {
+                ChainEvent::Deposited { user, .. }
+                | ChainEvent::Redeemed { user, .. }
+                | ChainEvent::WithdrawPaid { user, .. } => users.push(*user),
+                ChainEvent::KeyAuthorized { owner, .. } => users.push(*owner),
+                _ => {}
+            }
+        }
+        users.sort();
+        users.dedup();
+        if users.is_empty() {
+            return None;
+        }
+        match self.chain.read_funds(users.clone(), block).await {
+            Ok(Some(v)) => Some(users.into_iter().zip(v).collect()),
+            Ok(None) => None,
+            Err(e) => {
+                if !self.funds_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!("Exchange.funds read failed (keeping event balances): {e:#}");
+                }
+                None
+            }
+        }
     }
 
     /// Cut and submit the next batch, if one is due. On failure its fills are reversed.

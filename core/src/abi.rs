@@ -103,6 +103,9 @@ alloy_sol_types::sol! {
         function isTradable(uint256 id, uint64 ts) external view returns (bool);
         function projectedRaised(uint256 id) external view returns (uint256);
         function balanceOf(address u) external view returns (uint256);
+        /// Internal balance + (ERC20 quote) min(wallet balance, allowance): what a batch can spend.
+        function spendable(address u) external view returns (uint256);
+        function funds(address[] calldata users) external view returns (uint256[] memory);
         function position(uint256 id, address u) external view returns (uint128 up, uint128 down);
         function filled(bytes32 orderHash) external view returns (uint128);
         function orderHash(Order calldata o) external view returns (bytes32);
@@ -140,6 +143,7 @@ alloy_sol_types::sol! {
         event Redeemed(uint256 launchId, address user, uint256 credit, uint256 loserShares);
         event TokensClaimed(uint256 launchId, address user, uint256 amount);
         event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
+        event FillSkipped(uint64 batchId, uint256 index, address user);
         event QuestionSet(uint256 launchId, string question, uint256 marketId);
         event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
         event ResolverSet(address resolver);

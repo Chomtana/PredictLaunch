@@ -202,6 +202,13 @@ pub enum ChainEvent {
         user: Address,
         amount: U256,
     },
+    /// ERC20 quote: fill `index` of batch `batch_id` was not applied (its payer could no longer pay). Emitted
+    /// before that batch's `BatchSubmitted`.
+    FillSkipped {
+        batch_id: u64,
+        index: u64,
+        user: Address,
+    },
     /// `batch` is the decoded `submitBatch` calldata, when available.
     BatchSubmitted {
         batch_id: u64,
@@ -499,6 +506,10 @@ pub struct State {
     pub claimed_shares: HashMap<(u64, Address), U256>,
     /// `Exchange.challengeWindow` (read at startup, then from `ChallengeWindowSet`).
     pub challenge_window: u64,
+    /// Fill indices of the next `BatchSubmitted` that the chain skipped (`FillSkipped`).
+    pending_skips: HashSet<u64>,
+    /// Users whose funds are read every poll even before they have any Exchange activity.
+    pub watched: HashSet<Address>,
     next_seq: u64,
     next_fill_id: u64,
 }
@@ -528,6 +539,8 @@ impl State {
             loser_shares: HashMap::new(),
             claimed_shares: HashMap::new(),
             challenge_window: DEFAULT_CHALLENGE_WINDOW,
+            pending_skips: HashSet::new(),
+            watched: HashSet::new(),
             next_seq: 0,
             next_fill_id: 0,
         }
@@ -743,6 +756,48 @@ impl State {
         self.drop_settled(now_ms);
     }
 
+    /// One poll: apply events, then (ERC20 quote) replace confirmed balances with `Exchange.funds` read at
+    /// the polled head, i.e. internal balance + what can be pulled from the wallet. Rebuilds when anything
+    /// changed.
+    pub fn apply_poll(
+        &mut self,
+        events: Vec<ChainEvent>,
+        funds: Option<Vec<(Address, U256)>>,
+        now_ms: u64,
+    ) {
+        let mut changed = !events.is_empty();
+        for e in events {
+            self.apply_event(e);
+        }
+        for (u, f) in funds.into_iter().flatten() {
+            if self.confirmed.balance(u) != f {
+                self.confirmed.balances.insert(u, f);
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild();
+            self.drop_settled(now_ms);
+        }
+    }
+
+    /// Read `u`'s funds on every poll from now on.
+    pub fn watch(&mut self, u: Address) {
+        self.watched.insert(u);
+    }
+
+    /// Everyone whose funds the sequencer needs: balance holders, key owners, order owners, watched.
+    pub fn tracked_users(&self) -> Vec<Address> {
+        let mut set: HashSet<Address> = self.watched.clone();
+        set.extend(self.confirmed.balances.keys().copied());
+        set.extend(self.chain_keys.keys().map(|(o, _)| *o));
+        set.extend(self.pending_keys.keys().map(|(o, _)| *o));
+        set.extend(self.user_orders.keys().copied());
+        let mut v: Vec<Address> = set.into_iter().collect();
+        v.sort();
+        v
+    }
+
     fn apply_event(&mut self, e: ChainEvent) {
         use ChainEvent as E;
         match e {
@@ -950,21 +1005,25 @@ impl State {
                     .unwrap_or_default();
                 self.claimed_shares.insert((launch_id, user), ls);
             }
+            E::FillSkipped { index, .. } => {
+                self.pending_skips.insert(index);
+            }
             E::BatchSubmitted {
                 batch_id,
                 ts,
                 fills,
                 batch,
             } => {
+                let skips = std::mem::take(&mut self.pending_skips);
                 self.last_batch_id = self.last_batch_id.max(batch_id);
                 self.last_batch_ts = self.last_batch_ts.max(ts);
                 let ours = self.batches.front().and_then(|b| b.sent.clone());
                 match (batch, ours) {
-                    (Some(eb), Some(sb)) if eb == sb => self.settle_front(),
+                    (Some(eb), Some(sb)) if eb == sb => self.settle_front(&skips),
                     (None, Some(sb)) if sb.ts == ts && sb.fills.len() as u64 == fills => {
-                        self.settle_front()
+                        self.settle_front(&skips)
                     }
-                    (Some(eb), _) => self.apply_foreign_batch(&eb),
+                    (Some(eb), _) => self.apply_foreign_batch(&eb, &skips),
                     (None, _) => {}
                 }
             }
@@ -978,7 +1037,7 @@ impl State {
     }
 
     /// Our in-flight batch landed: move its fills into `confirmed`.
-    fn settle_front(&mut self) {
+    fn settle_front(&mut self, skips: &HashSet<u64>) {
         let Some(b) = self.batches.pop_front() else {
             return;
         };
@@ -986,7 +1045,21 @@ impl State {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
             self.pending_keys.remove(&(k.owner, k.key));
         }
-        for f in &b.fills {
+        if !skips.is_empty() {
+            let ids: HashSet<u64> = b
+                .fills
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| skips.contains(&(*i as u64)))
+                .map(|(_, f)| f.id)
+                .collect();
+            self.trades.retain(|t| !ids.contains(&t.fill_id));
+            self.soft_reversals += ids.len() as u64;
+        }
+        for (i, f) in b.fills.iter().enumerate() {
+            if skips.contains(&(i as u64)) {
+                continue;
+            }
             let (t, m) = (&self.orders[&f.taker].order, &self.orders[&f.maker].order);
             let _ = self
                 .confirmed
@@ -995,7 +1068,7 @@ impl State {
     }
 
     /// A batch we did not send ourselves (e.g. replayed after a restart).
-    fn apply_foreign_batch(&mut self, b: &abi::Batch) {
+    fn apply_foreign_batch(&mut self, b: &abi::Batch, skips: &HashSet<u64>) {
         for k in &b.keys {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
         }
@@ -1025,7 +1098,10 @@ impl State {
             }
             decoded.push(Some((o, h)));
         }
-        for f in &b.fills {
+        for (i, f) in b.fills.iter().enumerate() {
+            if skips.contains(&(i as u64)) {
+                continue;
+            }
             let (Some(Some((t, th))), Some(Some((m, mh))), Some(kind)) = (
                 decoded.get(f.taker as usize),
                 decoded.get(f.maker as usize),

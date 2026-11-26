@@ -197,7 +197,10 @@ async fn user<C: Chain>(State(app): AppState<C>, Path(addr): Path<String>) -> Re
             None,
         );
     };
-    Json(views::user(&app.state.lock().unwrap(), a)).into_response()
+    let mut s = app.state.lock().unwrap();
+    // Approve-only trading: a wallet that only approved has no Exchange events yet; read its funds from now on.
+    s.watch(a);
+    Json(views::user(&s, a)).into_response()
 }
 
 fn accept_err(e: AcceptError) -> Response {
@@ -297,6 +300,11 @@ async fn faucet<C: Chain>(State(app): AppState<C>, Json(body): Json<Value>) -> R
                 tracing::debug!("faucet: no gas top-up ({e:#})");
             }
             app.chain.mint_quote(quote, a, quote_amount).await?;
+            app.state.lock().unwrap().watch(a);
+            // Show the minted funds as tradable right away.
+            if let Err(e) = app.poll().await {
+                tracing::debug!("faucet: poll failed ({e:#})");
+            }
         }
         anyhow::Ok(())
     }
