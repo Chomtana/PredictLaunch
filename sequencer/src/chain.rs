@@ -16,10 +16,11 @@ use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{Filter, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::Signer as _;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use anyhow::Context;
-use predictlaunch_core::abi::{self, IAggregator, IExchange, IPortal, IQuoteToken};
+use predictlaunch_core::abi::{self, IAggregator, IExchange, IFourRail, IPortal, IQuoteToken};
 use predictlaunch_core::state::ChainEvent;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -351,7 +352,14 @@ pub struct RpcChain {
     pub exchange: Address,
     pub portal: Address,
     pub operator: Address,
+    /// The OpenFour rail (`FourRail`); address(0) = Flap only. Launches on it graduate through
+    /// `FourRail.graduate` with the operator key's signature (the operator is `Core.signer` on our fork).
+    pub four_rail: Address,
+    signer: PrivateKeySigner,
 }
+
+/// How long a Four create signature stays valid (`CreateTokenArgs.validTimestamp`).
+const FOUR_SIG_TTL: u64 = 600;
 
 /// Max blocks per `eth_getLogs`.
 const LOG_CHUNK: u64 = 2_000;
@@ -369,7 +377,7 @@ impl RpcChain {
             .context("bad operator key")?;
         let operator = signer.address();
         let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(signer))
+            .wallet(EthereumWallet::from(signer.clone()))
             .connect_http(rpc_url.parse().context("bad rpc url")?)
             .erased();
         Ok(Self {
@@ -377,7 +385,41 @@ impl RpcChain {
             exchange,
             portal,
             operator,
+            four_rail: Address::ZERO,
+            signer,
         })
+    }
+
+    /// Graduate Four launches (those whose rail is `rail`) through the OpenFour rail.
+    pub fn with_four_rail(mut self, rail: Address) -> Self {
+        self.four_rail = rail;
+        self
+    }
+
+    /// Sign the rail's OpenFour create digest and call `FourRail.graduate`, which runs `Exchange.graduate`.
+    async fn graduate_four(&self, launch: u64) -> anyhow::Result<B256> {
+        let id = U256::from(launch);
+        let now = self
+            .provider
+            .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+            .await?
+            .context("no latest block")?
+            .header
+            .timestamp;
+        let valid = U256::from(now + FOUR_SIG_TTL);
+        let digest = self
+            .view(self.four_rail, IFourRail::createDigestCall { id, validTimestamp: valid })
+            .await?;
+        let sig = self.signer.sign_message(digest.as_slice()).await?;
+        self.send_to(
+            self.four_rail,
+            IFourRail::graduateCall {
+                id,
+                validTimestamp: valid,
+                sig: Bytes::from(sig.as_bytes().to_vec()),
+            },
+        )
+        .await
     }
 
     /// First block where the Exchange has code (binary search), so log polling starts there.
@@ -567,6 +609,14 @@ impl Chain for RpcChain {
     }
 
     async fn graduate(&self, launch: u64) -> anyhow::Result<B256> {
+        if !self.four_rail.is_zero() {
+            let l = self
+                .view(self.exchange, IExchange::getLaunchCall { id: U256::from(launch) })
+                .await?;
+            if l.rail == self.four_rail {
+                return self.graduate_four(launch).await;
+            }
+        }
         self.send(IExchange::graduateCall {
             launchId: U256::from(launch),
         })

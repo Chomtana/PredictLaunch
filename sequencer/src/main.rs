@@ -22,6 +22,10 @@ struct Args {
     /// PredictLaunchLauncherFactory address (returned in /api/config for Portal.newLauncher).
     #[arg(long, env = "PREDICTLAUNCH_FACTORY", default_value_t = Address::ZERO)]
     factory: Address,
+    /// OpenFour rail (FourRail): the factory of Four launches; their graduation is signed with the operator
+    /// key, which must be the OpenFour Core signer. Zero = Flap only.
+    #[arg(long, env = "PREDICTLAUNCH_FOUR_RAIL", default_value_t = Address::ZERO)]
+    four_rail: Address,
     /// Flap Portal address.
     #[arg(long, env = "PREDICTLAUNCH_PORTAL", default_value_t = PORTAL)]
     portal: Address,
@@ -74,7 +78,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let chain = RpcChain::new(&args.rpc, args.exchange, args.portal, &args.operator_key)?;
+    let chain = RpcChain::new(&args.rpc, args.exchange, args.portal, &args.operator_key)?
+        .with_four_rail(args.four_rail);
     let operator = chain.operator;
     let start_block = match args.start_block {
         Some(b) => b,
@@ -93,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
         },
         public_rpc: args.public_rpc.unwrap_or(args.rpc.clone()),
         factory: args.factory,
+        four_rail: args.four_rail,
         portal: args.portal,
         batch_ms: args.batch_ms,
         poll_ms: args.poll_ms,

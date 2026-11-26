@@ -37,6 +37,7 @@ async fn rpc_chain_round_trip() {
             domain,
             public_rpc: rpc.clone(),
             factory: Address::ZERO,
+            four_rail: Address::ZERO,
             portal: PORTAL,
             batch_ms: 0,
             poll_ms: 1000,

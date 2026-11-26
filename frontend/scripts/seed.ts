@@ -20,7 +20,7 @@
 // round is created so the demo never goes quiet.
 
 import { privateKeyToAccount } from 'viem/accounts'
-import { parseEther } from 'viem'
+import { parseEther, type Address } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
 import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
 import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, isPriceMarket, pick, shuffle, type Asset, type Meme } from '../src/lib/catalog.ts'
@@ -62,7 +62,8 @@ const CUTS = [1000, 1500, 2000, 2500, 3000]
 /** Strike vs the live price, in bps: mostly near the money so both sides trade. */
 const STRIKE_OFFSETS = [-30, -15, 0, 0, 10, 20, 35, 50]
 
-async function createPrice(asset: Asset): Promise<Mkt> {
+/** `four`: create on Four.meme through the OpenFour rail instead of Flap. */
+async function createPrice(asset: Asset, four: Address | null = null): Promise<Mkt> {
   const now = await S.chainNow()
   const feed = FEEDS[asset]
   const minutes = pick([10, 12, 15, 20, 25, 30])
@@ -75,8 +76,9 @@ async function createPrice(asset: Asset): Promise<Mkt> {
     // bigger raises only when there is time to fill them
     target: parseEther(pick(minutes >= 20 ? ['2.15', '2.5', '3', '3.5', '4'] : ['2.15', '2.5', '3'])) * K,
   }
-  const { id, token, rail } = await S.createLaunch(CREATOR, { ...d, imageURI: ICONS[asset], question: '', marketId: 0n })
-  console.log(`seed: launch #${id} $${d.symbol} "${d.name}" ${asset} >= ${Number(d.strike) / 1e18} in ${minutes} min, cut ${d.cutBps / 100}%, token ${token}`)
+  const c = { ...d, imageURI: ICONS[asset], question: '', marketId: 0n }
+  const { id, token, rail } = four ? await S.createFourLaunch(CREATOR, four, c) : await S.createLaunch(CREATOR, c)
+  console.log(`seed: launch #${id} on ${four ? 'Four.meme' : 'Flap'} $${d.symbol} "${d.name}" ${asset} >= ${Number(d.strike) / 1e18} in ${minutes} min, cut ${d.cutBps / 100}%, token ${token}`)
   return { id, rail, strike: d.strike, settleTime: d.settleTime, feed, target: d.target, cutBps: d.cutBps }
 }
 
@@ -138,7 +140,10 @@ async function createQuestion(): Promise<Mkt | null> {
 /** One round: 2-3 price launches on distinct assets + 1-2 question launches. */
 async function createAll(): Promise<Mkt[]> {
   const out: Mkt[] = []
-  for (const asset of shuffle<Asset>(['BTC', 'BNB', 'ETH']).slice(0, pick([2, 3]))) out.push(await createPrice(asset))
+  // Flap by default; when the sequencer has an OpenFour rail, one price launch per round goes to Four.meme.
+  const four = await S.fourRail()
+  const assets = shuffle<Asset>(['BTC', 'BNB', 'ETH']).slice(0, pick([2, 3]))
+  for (const [i, asset] of assets.entries()) out.push(await createPrice(asset, i === 0 ? four : null))
   for (let i = pick([1, 2]); i > 0; i--) {
     const q = await createQuestion()
     if (q) out.push(q)

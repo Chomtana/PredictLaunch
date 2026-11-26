@@ -5,6 +5,7 @@
 #   scripts/dev.sh --no-seed       ... without the seeded launches and bots
 #   scripts/dev.sh --no-live       ... seed once, but no live market-maker loop afterwards
 #   scripts/dev.sh --no-frontend   ... without the Vite dev server (e.g. for API work or e2e)
+#   scripts/dev.sh --no-four       ... Flap only: skip our OpenFour (Four.meme) instance (saves ~5 min)
 #   BATCH_MS=3000 scripts/dev.sh   batch every 3 s (default 2 s)
 #   QUOTE=bnb scripts/dev.sh       native BNB collateral (default: Flap's testnet faucet USDT)
 #
@@ -32,12 +33,14 @@ API="http://127.0.0.1:$SEQ_PORT"
 SEED=1
 LIVE=1
 FRONTEND=1
+FOUR=1
 for a in "$@"; do
   case "$a" in
     --no-seed) SEED=0 ;;
     --no-live) LIVE=0 ;;
     --no-frontend) FRONTEND=0 ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    --no-four) FOUR=0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option $a"; exit 1 ;;
   esac
 done
@@ -55,7 +58,7 @@ OWNER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 OP_KEY=0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6
 OP=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 
-for bin in anvil forge cast cargo pnpm node jq curl; do
+for bin in anvil forge cast cargo pnpm node npm git jq curl; do
   command -v "$bin" >/dev/null || { echo "missing $bin"; exit 1; }
 done
 for p in "$RPC_PORT" "$SEQ_PORT" $([ $FRONTEND = 1 ] && echo "$WEB_PORT"); do
@@ -104,6 +107,17 @@ echo "exchange $EXCHANGE  factory $FACTORY  (from block $START_BLOCK)"
 step "fork setup: authorize the Exchange on the Atlas feeds"
 "$ROOT/contracts/script/fork-setup.sh" "$RPC" "$DEV/deploy.json" 2>&1 | scrub
 
+FOUR_RAIL=0x0000000000000000000000000000000000000000
+if [ $FOUR = 1 ]; then
+  step "deploying our OpenFour (Four.meme) instance + the PredictLaunch preset (a few minutes on a fresh fork)"
+  "$ROOT/scripts/openfour-fork.sh" "$RPC" "$DEPLOYER_KEY" "$OP" "$EXCHANGE" 2>&1 | scrub >"$DEV/openfour.log" \
+    || fail "OpenFour deploy" "$DEV/openfour.log"
+  FOUR_RAIL="$(jq -r .rail "$DEV/four.json")"
+  echo "four rail $FOUR_RAIL  preset $(jq -r .presetId "$DEV/four.json")"
+else
+  rm -f "$DEV/four.json"
+fi
+
 step "starting the feed relay (live testnet prices -> fork, every 2 s)"
 (cd "$ROOT/frontend" && exec node --experimental-strip-types --no-warnings scripts/feed-relay.ts --fork "$RPC") >"$DEV/feed-relay.log" 2>&1 &
 RELAY_PID=$!
@@ -112,7 +126,7 @@ for _ in $(seq 120); do grep -q 'feed-relay: ready' "$DEV/feed-relay.log" 2>/dev
 grep -q 'feed-relay: ready' "$DEV/feed-relay.log" || fail "feed relay" "$DEV/feed-relay.log"
 
 step "starting sequencer on $API (batch every ${BATCH_MS} ms)"
-RUST_LOG="${RUST_LOG:-info}" "$SEQ_BIN" --rpc "$RPC" --exchange "$EXCHANGE" --factory "$FACTORY" \
+RUST_LOG="${RUST_LOG:-info}" "$SEQ_BIN" --rpc "$RPC" --exchange "$EXCHANGE" --factory "$FACTORY" --four-rail "$FOUR_RAIL" \
   --operator-key "$OP_KEY" --port "$SEQ_PORT" --batch-ms "$BATCH_MS" --dev-faucet --start-block "$START_BLOCK" \
   --quote-symbol "$QUOTE_SYMBOL" --oracle-dir "$DEV/oracle" \
   >"$DEV/sequencer.log" 2>&1 &
@@ -147,7 +161,8 @@ $([ $FRONTEND = 1 ] && echo "    frontend    http://localhost:$WEB_PORT")
     sequencer   $API/api/status
     anvil       $RPC   chainId 97 (fork of BSC testnet)
     Exchange    $EXCHANGE
-    Factory     $FACTORY
+    Factory     $FACTORY  (Flap)
+    Four rail   $FOUR_RAIL  (OpenFour; 0x0 = --no-four)
 
   MetaMask: add a CUSTOM network "PredictLaunch fork", RPC $RPC, chain ID 97, symbol BNB.
   It has the same chain ID as the real BSC testnet: keep them as separate networks, never mix them,

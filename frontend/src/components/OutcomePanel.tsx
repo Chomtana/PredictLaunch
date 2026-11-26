@@ -4,16 +4,18 @@ import { FailedPanel } from './FailedPanel.tsx'
 import { GraduatedPanel } from './GraduatedPanel.tsx'
 import type { Phase } from './LaunchCard.tsx'
 import { labelsFor } from '../lib/labels.ts'
+import { venueOf } from '../lib/venue.ts'
 
 /** Shown above the progress once the market has settled: graduated / launching / failed / void. */
 export function OutcomePanel({ l, phase, mine }: { l: LaunchSummary; phase: Phase; mine: UserLaunch | null }) {
-  const { claimTokens } = useApp()
+  const { claimTokens, config } = useApp()
   const id = n(l.id)
   if (phase === 'graduated' || phase === 'graduating') {
     const zero = /^0x0{40}$/i.test(l.token ?? '')
     return (
       <GraduatedPanel
         graduating={phase === 'graduating'}
+        venue={venueOf(l.rail, config)}
         token={l.token && !zero ? l.token : null}
         symbol={l.symbol}
         raised={big(l.raised)}

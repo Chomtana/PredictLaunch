@@ -48,7 +48,7 @@ export function App() {
       <footer className="footer">
         <span>PredictLaunch · BSC testnet{config && /127\.0\.0\.1|localhost/.test(config.rpc) ? ' (local fork)' : ''}</span>
         <span className="muted">
-          Launches via Flap Portal · prices by Atlas oracle{config ? ` · Exchange ${config.exchange.slice(0, 8)}…` : ''}
+          Launches via Flap Portal{config?.fourRail && !/^0x0{40}$/i.test(config.fourRail) ? ' or Four.meme (OpenFour)' : ''} · prices by Atlas oracle{config ? ` · Exchange ${config.exchange.slice(0, 8)}…` : ''}
         </span>
       </footer>
       <AccountDrawer />

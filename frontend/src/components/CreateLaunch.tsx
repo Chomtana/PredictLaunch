@@ -9,6 +9,7 @@ import { useApp } from '../state.tsx'
 import { CoinAvatar, Spinner } from './ui.tsx'
 import { MarketRow } from './Cournot.tsx'
 import { QuickLaunches } from './QuickLaunch.tsx'
+import { fourEnabled, VENUE_NAME, type Venue } from '../lib/venue.ts'
 
 export type LaunchDraft = Omit<LaunchConfig, 'salt'>
 
@@ -63,9 +64,12 @@ interface FormProps {
   onSubmit: (cfg: LaunchDraft | (() => LaunchDraft)) => Promise<unknown> | void
   busy?: string | null
   cournot?: CournotClient
+  /** Where the coin graduates (default Flap). */
+  venue?: Venue
 }
 
-export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot }: FormProps) {
+export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmit, busy, cournot = defaultCournot, venue = 'flap' }: FormProps) {
+  const vName = VENUE_NAME[venue]
   const [kind, setKind] = useState<'quick' | 'price' | 'question'>('quick')
   const isQ = kind === 'question'
   const q = config.quoteSymbol ?? 'BNB'
@@ -125,9 +129,9 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     if (!Number.isFinite(settleSec)) e.settle = 'Pick a date and time'
     else if (dur < config.minDuration) e.settle = `At least ${duration(config.minDuration)} from now`
     else if (dur > config.maxDuration) e.settle = `At most ${duration(config.maxDuration)} from now`
-    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtAmt(minTarget, 2)} ${q} (Flap's pool floor)`
+    if (!targetWei || targetWei < minTarget) e.target = `Must be at least ${fmtAmt(minTarget, 2)} ${q} (${venue === 'flap' ? "Flap's pool floor" : 'the minimum target'})`
     return e
-  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q, isQ, questionText, pick])
+  }, [name, symbol, strikeWei, settleSec, dur, config, targetWei, minTarget, q, isQ, questionText, pick, venue])
   const valid = Object.keys(errors).length === 0
 
   const L = isQ ? QUESTION_LABELS.names : PRICE_LABELS.names
@@ -243,12 +247,12 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         {isQ ? (
           <p className="muted lead">
             Launch a memecoin on a yes/no question. Traders bet YES or NO; the Cournot oracle supplies the odds and the settlement evidence. If the pool
-            reaches the target at settlement, the coin launches on Flap and losers get the tokens.
+            reaches the target at settlement, the coin launches on {vName} and losers get the tokens.
           </p>
         ) : (
           <p className="muted lead">
             Launch a memecoin on a price prediction. Traders bet Up or Down; the cut from winners fills your coin's pool. If the pool reaches the target at
-            settlement, the coin launches on Flap and losers get the tokens.
+            settlement, the coin launches on {vName} and losers get the tokens.
           </p>
         )}
 
@@ -413,7 +417,9 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
           )}
         </button>
         <div className="muted small center">
-          Costs the Flap salt-lock fee ({fmtAmt(BigInt(config.saltLockFee), 3)} BNB) plus gas. The token address is mined to end in …7777.
+          {venue === 'flap'
+            ? `Costs the Flap salt-lock fee (${fmtAmt(BigInt(config.saltLockFee), 3)} BNB) plus gas. The token address is mined to end in …7777.`
+            : 'Gas only. The coin is created on Four.meme (OpenFour) when the launch graduates.'}
         </div>
       </form>
 
@@ -464,7 +470,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
             {isQ ? 'After settlement the resolver proposes the outcome from Cournot evidence; it is final after a challenge window.' : 'At settlement the oracle decides.'} Winners redeem {(10000 - cut) / 100}¢; the {cut / 100}% cut goes to the pool.
           </li>
           <li>
-            <b>Graduate.</b> Pool ≥ target: 1B tokens are minted through Flap, 500M + the pool seed PancakeSwap, losers claim the other 500M.
+            <b>Graduate.</b> Pool ≥ target: 1B tokens are minted through {venue === 'flap' ? 'Flap' : 'Four.meme (OpenFour)'}, 500M + the pool seed PancakeSwap, losers claim the other 500M.
           </li>
           <li>
             <b>Or not.</b> Pool short of target: winners are paid the full 1.00 and no coin launches.
@@ -490,6 +496,7 @@ function Field({ label, id, err, hint, children }: { label: string; id: string; 
 /** The #/create page, wired to app state. */
 export function CreateLaunch() {
   const { config, configError, priceOf, quoteUsd, wallet, createLaunch, setAccountOpen } = useApp()
+  const [venue, setVenue] = useState<Venue>('flap')
   const [busy, setBusy] = useState<string | null>(null)
   if (!config) {
     return (
@@ -510,16 +517,32 @@ export function CreateLaunch() {
           </button>
         </div>
       )}
+      {fourEnabled(config) && (
+        <div className="field venue-pick">
+          <span className="field-label">Launch on</span>
+          <div className="seg" role="group" aria-label="Launch on">
+            {(['flap', 'four'] as const).map((v) => (
+              <button type="button" key={v} aria-pressed={venue === v} className={venue === v ? 'on' : ''} onClick={() => setVenue(v)}>
+                {VENUE_NAME[v]}
+              </button>
+            ))}
+          </div>
+          <span className="field-hint">
+            Same mechanism on both: at graduation the cut seeds a PancakeSwap pool with 500M tokens and losers claim the other 500M.
+          </span>
+        </div>
+      )}
       <CreateLaunchForm
+        venue={venue}
         config={config}
         priceOf={priceOf}
         quoteUsd={quoteUsd}
         connected={!!wallet}
         busy={busy}
         onSubmit={async (cfg) => {
-          setBusy('Mining salt…')
+          setBusy(venue === 'flap' ? 'Mining salt…' : 'Creating…')
           try {
-            const ok = await createLaunch(cfg, setBusy)
+            const ok = await createLaunch(cfg, setBusy, venue)
             if (ok) window.location.hash = '#/'
           } finally {
             setBusy(null)

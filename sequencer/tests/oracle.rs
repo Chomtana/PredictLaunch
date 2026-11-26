@@ -20,6 +20,7 @@ fn settings(base: &str, mode: Mode, key: Option<&str>, dir: PathBuf) -> Settings
         domain: test_domain(),
         public_rpc: "http://127.0.0.1:8545".into(),
         factory: Address::repeat_byte(0xFA),
+        four_rail: Address::ZERO,
         portal: predictlaunch_core::PORTAL,
         batch_ms: 2000,
         poll_ms: 1000,

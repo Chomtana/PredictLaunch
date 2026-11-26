@@ -224,6 +224,30 @@ raised)`, `Graduating(launchId)`, `Graduated(launchId, token, raised)`, `LaunchF
 its batch's `BatchSubmitted`), `Trade(launchId, takerHash, makerHash, kind, makerPrice,
 amount)`.
 
+### OpenFour (Four.meme) rail — added 2026-11-26
+
+```solidity
+// Exchange additions
+function setExtraFactory(address f, bool on) external onlyOwner;  // factories besides `factory` (Flap)
+function extraFactory(address f) external view returns (bool);
+// registerLaunch accepts msg.sender == factory || extraFactory[msg.sender]; `token` may be address(0),
+// then receiveLoserTokens binds l.token to the token the rail hands over.
+
+// contracts/src/openfour/FourRail.sol  (is ILaunchRail; one contract for every Four launch)
+constructor(Exchange exchange, IOpenFourCore core, uint256 presetId);
+function createLaunch(Exchange.LaunchConfig calldata c) external returns (uint256 launchId); // creator = msg.sender, salt ignored
+function graduate(uint256 id, uint256 validTimestamp, bytes calldata sig) external;          // runs Exchange.graduate(id)
+function createDigest(uint256 id, uint256 validTimestamp) external view returns (bytes32);   // sign as EIP-191
+function createArgs(uint256 id, uint256 raise, uint256 validTimestamp) external view returns (bytes memory);
+function quoteAsset() external view returns (address);   // Exchange quote, or WBNB for native
+// launch(id, raise): Core.createToken(createArgs, sig) -> Core.buy(token, 500M, cost) (auto-migrates to PCS V2)
+//   -> dust to creator -> Exchange.receiveLoserTokens(id, token, 500M). Plain Exchange.graduate reverts NoSignature.
+```
+
+Sequencer: `--four-rail <addr>` (`PREDICTLAUNCH_FOUR_RAIL`); `/api/config.fourRail`. The keeper graduates a
+launch whose `rail == fourRail` through `FourRail.graduate` with the operator key's signature (validTimestamp
+= latest block + 600). Frontend: "Launch on" Flap (default) / Four.meme on the create page when `fourRail` is set.
+
 ### Question launches (Cournot) — added 2026-11-26, user's decision
 
 Two launch kinds share everything (Exchange, book, cut, graduation, loser claims, redeem). They differ

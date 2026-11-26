@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, decodeEventLog, encodeAbiParameters, encodeFunctionData, http, keccak256, parseAbi, parseEther, toHex, type Address, type Hex, type LocalAccount } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, isNative, NATIVE, portalAbi, type LaunchConfig } from '../src/lib/chain.ts'
+import { approveTrading, chainFor, deposit as depositTx, encodeLaunchConfig, erc20Abi, exchangeAbi, fourRailAbi, isNative, NATIVE, portalAbi, ZERO_SALT, type LaunchConfig } from '../src/lib/chain.ts'
 import { authorizeKeyMsg, cancelTyped, randomNonce, signAuthorizeKey, signOrder, type Domain, type Msg, type Order } from '../src/lib/eip712.ts'
 import { PORTAL, mineSaltSync, predictToken, randomSeed } from '../src/lib/salt.ts'
 
@@ -142,6 +142,27 @@ export function setup(rpc: string, api: string, deployPath: string) {
     throw new Error('no LaunchCreated event in the newLauncher receipt')
   }
 
+  /** The sequencer's OpenFour rail (`/api/config` fourRail), or null when it runs Flap only. */
+  async function fourRail(): Promise<Address | null> {
+    const c = await get<{ fourRail?: Address }>('/api/config')
+    return c.fourRail && !/^0x0{40}$/i.test(c.fourRail) ? c.fourRail : null
+  }
+
+  /** FourRail.createLaunch(LaunchConfig): a Four.meme launch (no salt or fee; the token is created at graduation). */
+  async function createFourLaunch(acct: LocalAccount, rail: Address, c: Omit<LaunchConfig, 'salt'>): Promise<{ id: bigint; token: Address; rail: Address }> {
+    const rc = await send(acct, { address: rail, abi: fourRailAbi, functionName: 'createLaunch', args: [{ ...c, salt: ZERO_SALT }] })
+    for (const log of rc.logs) {
+      if (log.address.toLowerCase() !== deploy.exchange.toLowerCase()) continue
+      try {
+        const ev = decodeEventLog({ abi: exchangeExtraAbi, data: log.data, topics: log.topics })
+        if (ev.eventName === 'LaunchCreated') return { id: ev.args.launchId, token: ev.args.token, rail: ev.args.rail }
+      } catch {
+        /* another event */
+      }
+    }
+    throw new Error('no LaunchCreated event in the FourRail.createLaunch receipt')
+  }
+
   /**
    * Fork only: pull the whole graduation path (Flap Portal, token implementation, PancakeSwap) into
    * anvil's fork cache before trading starts. The first graduation on a cold fork fetches so much
@@ -274,7 +295,7 @@ export function setup(rpc: string, api: string, deployPath: string) {
     }
   }
 
-  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, place, cancelAll }
+  return { deploy, chain, pc, D, quote, native, Q, K, get, post, send, chainNow, feedPrice, createLaunch, fourRail, createFourLaunch, warmGraduation, fund, depositQuote, tradable, makeBot, topUp, place, cancelAll }
 }
 
 export interface Bot {

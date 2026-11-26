@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { fmtShares, num18, POOL_TOKENS, fmtAmt } from '../lib/units.ts'
 import { Spinner } from './ui.tsx'
 import { useQuote } from '../state.tsx'
+import { VENUE_NAME, type Venue } from '../lib/venue.ts'
 
 /** Pool opening price in the quote token per token: raised / 500M. */
 export const poolPrice = (raised: bigint) => num18(raised) / num18(POOL_TOKENS)
@@ -14,6 +15,7 @@ export function GraduatedPanel({
   loserShares,
   onClaim,
   graduating,
+  venue = 'flap',
 }: {
   token: string | null
   symbol: string
@@ -23,6 +25,8 @@ export function GraduatedPanel({
   loserShares: string
   onClaim: () => void
   graduating?: boolean
+  /** Where the coin is minted (default Flap). */
+  venue?: Venue
 }) {
   const { symbol: q } = useQuote()
   const [copied, setCopied] = useState(false)
@@ -31,10 +35,10 @@ export function GraduatedPanel({
     return (
       <div className="panel state-panel graduated">
         <h2>
-          <Spinner size={18} /> Launching on Flap…
+          <Spinner size={18} /> Launching on {VENUE_NAME[venue]}…
         </h2>
         <div className="muted">
-          The pool hit its target. ${symbol} is being minted through the Flap Portal: {fmtAmt(raised, 3)} {q} and 500M tokens seed the PancakeSwap pool.
+          The pool hit its target. ${symbol} is being minted through {venue === 'flap' ? 'the Flap Portal' : 'Four.meme (OpenFour)'}: {fmtAmt(raised, 3)} {q} and 500M tokens seed the PancakeSwap pool.
         </div>
       </div>
     )
@@ -53,7 +57,7 @@ export function GraduatedPanel({
     <div className="panel state-panel graduated">
       <h2>🎓 ${symbol} graduated</h2>
       <div className="muted">
-        The prediction is over. {fmtAmt(raised, 3)} {q} from winners' cut and 500M ${symbol} now form the PancakeSwap pool. Losers share the other 500M.
+        The prediction is over. {fmtAmt(raised, 3)} {q} from winners' cut and 500M ${symbol} now form the PancakeSwap pool (minted on {VENUE_NAME[venue]}). Losers share the other 500M.
       </div>
       {token && (
         <div className="addr-row">

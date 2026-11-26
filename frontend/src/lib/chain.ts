@@ -1,4 +1,4 @@
-// Onchain side: Exchange + Flap Portal ABIs (SPEC "Contract Exchange"), public client, writers.
+// Onchain side: Exchange + Flap Portal + FourRail ABIs (SPEC "Contract Exchange"), public client, writers.
 
 import {
   createPublicClient,
@@ -95,6 +95,24 @@ export const PRICE_LAUNCH_EXTRA = { question: '', marketId: 0n } as const
 export const encodeLaunchConfig = (c: LaunchConfig): Hex => encodeAbiParameters(LAUNCH_CONFIG_ABI, [c])
 
 type Who = Account | Address
+
+export const fourRailAbi = [
+  { type: 'function', name: 'createLaunch', stateMutability: 'nonpayable', inputs: [{ name: 'c', ...LAUNCH_CONFIG_ABI[0] }], outputs: [{ name: 'launchId', type: 'uint256' }] },
+] as const
+
+export const ZERO_SALT: Hex = `0x${'0'.repeat(64)}`
+
+/** FourRail.createLaunch(cfg): a Four.meme launch (no salt, no fee; the token is created at graduation). */
+export function createFourLaunch(wallet: WalletClient, account: Who, rail: Address, cfg: LaunchConfig): Promise<Hex> {
+  return wallet.writeContract({
+    address: rail,
+    abi: fourRailAbi,
+    functionName: 'createLaunch',
+    args: [cfg],
+    account,
+    chain: wallet.chain,
+  })
+}
 
 /** Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)). Returns the tx hash. */
 export function createLaunch(

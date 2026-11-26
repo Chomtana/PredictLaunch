@@ -8,12 +8,16 @@ At settlement, winners are paid 1 − cut per share, the cut fills the launch's 
 memecoin, and graduation launches the token through Flap's Pool Launch Portal via our Launcher
 Factory, with a PancakeSwap pool. If the target isn't reached, winners are paid in full.
 
+The creator picks where the coin launches: **Flap** (default) or **Four.meme**, through our own OpenFour
+preset (see [Four.meme (OpenFour) rail](#fourmeme-openfour-rail)). Same mechanism on both: 1B supply,
+the raise and 500M seed a PancakeSwap pool, losers claim the other 500M.
+
 - Interfaces: [SPEC.md](SPEC.md) (and each track's `SPEC-NOTES.md`)
 - Design: [docs/superpowers/specs/2026-11-25-predictlaunch-design.md](docs/superpowers/specs/2026-11-25-predictlaunch-design.md)
 - Plan: [docs/superpowers/plans/2026-11-25-predictlaunch.md](docs/superpowers/plans/2026-11-25-predictlaunch.md)
 
 ```
-contracts/   Foundry: Exchange, Flap Launcher Factory + Launcher (rail)
+contracts/   Foundry: Exchange, Flap Launcher Factory + Launcher (rail), OpenFour preset + FourRail (src/openfour/)
 core/        Rust lib: types, EIP-712, book/matcher, state mirror, batcher
 sequencer/   Rust service: matching, batches, keeper, HTTP/WS API
 frontend/    React/Vite UI + scripts/ (feed relay, seed bots, e2e driver)
@@ -41,6 +45,7 @@ scripts/dev.sh                 # everything, including the frontend at http://lo
 scripts/dev.sh --no-live       # seed once, no live market-maker loop
 scripts/dev.sh --no-seed       # no seeded launches/bots
 scripts/dev.sh --no-frontend   # no Vite (API work, e2e)
+scripts/dev.sh --no-four       # Flap only: skip our OpenFour instance (saves ~5 min)
 ```
 
 It runs, in order: `anvil --fork-url $BSC_TESTNET_RPC_URL --chain-id 97 --block-time 1` →
@@ -108,6 +113,40 @@ Instead of MetaMask, pick a dev wallet in the connect dialog (shown only when th
 Alice #0, Bob #1, Carol #2 or Erin #4. It signs with that public anvil key in the browser, no
 extension needed. The seed bots use #3 (creator), #5 (maker), #6 and #7 (takers); #9 is the
 operator. Local fork only.
+
+## Four.meme (OpenFour) rail
+
+OpenFour is Four.meme's modular launch engine. Following the
+[openfour-docs](https://github.com/four-meme-community/openfour-docs) developer guide, we fork-deploy our
+**own** OpenFour instance (Registry, Core, FeeRouter, Tools over the testnet implementations; we own it) and
+register a **PredictLaunch preset** on it:
+
+| Slot | Module | Notes |
+| --- | --- | --- |
+| token, vault | fork's `TOKEN_STANDARD`, `VAULT_BASIC` | reused |
+| curve | `FairLaunchCurveModule` (`module.curve.fair_launch`) | fixed price `raise / 500M`, sells off |
+| trade | `PredictLaunchTradeModule` (`module.trade.predict_launch`) | new: only the rail may buy, no sells |
+| migrate | `FairLaunchMigrateModule` (`module.migrate.fair_launch`) | at sell-out: raise + other 500M to an empty PCS V2 pair, LP burned |
+| validator | `PredictLaunchPresetValidator` | pins 1B supply, 500M sale, raise = sale × price, buyer = rail |
+
+`FourRail` (`contracts/src/openfour/FourRail.sol`) is both the factory and the graduation rail of Four
+launches. `FourRail.createLaunch(cfg)` registers the market on the Exchange (no salt, no fee; the token
+doesn't exist yet). At graduation the keeper signs the rail's `createDigest` with the operator key (our
+fork's `Core.signer`) and calls `FourRail.graduate(id, validTimestamp, sig)`, which runs
+`Exchange.graduate`: `Core.createToken` on the preset, `Core.buy` of the whole 500M sale with the raise
+(sold out, so Core migrates to PancakeSwap in the same call), and the 500M goes to the Exchange for the
+losers. On our fork the preset has zero protocol/dev fees, so the pool gets the whole raise (minus
+`raise / 500M` rounding dust, sent to the creator).
+
+`scripts/openfour-fork.sh <rpc> <deployer key> <signer> <exchange>` does the whole setup (openfour-docs
+`fork-deploy` at a pinned commit, then `forge script DeployFour`) and writes `.dev/four.json`; `dev.sh`
+runs it unless `--no-four`. On real testnet the same script works (deployer needs tBNB and must own the
+Exchange), then pass `--four-rail <rail>` to the sequencer. Fork tests:
+`OPENFOUR_RPC=<rpc with the fork deployed> OPENFOUR_JSON=../.dev/openfour/fork-deployment.json forge test --mc FourForkTest --threads 1`.
+
+Limitation: the create signature covers the raise, so it can only be made at graduation, by a key that is
+`Core.signer`. That is fine on our own OpenFour instance; on the official Four.meme deployment the signer is
+Four.meme's create API, which this path does not use.
 
 ## End-to-end smoke: `scripts/e2e.sh`
 

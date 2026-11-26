@@ -89,6 +89,7 @@ pub fn config_json<C: Chain>(app: &App<C>) -> Value {
         "rpc": s.public_rpc,
         "exchange": s.domain.exchange,
         "factory": s.factory,
+        "fourRail": s.four_rail,
         "portal": s.portal,
         "saltLockFee": app.info.salt_lock_fee.to_string(),
         "minTarget": app.info.min_target.to_string(),

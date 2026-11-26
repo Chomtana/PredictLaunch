@@ -10,6 +10,7 @@ import { authorizeKeyMsg, randomNonce, signAuthorizeKey, signCancel, signOrder, 
 import { binancePair, streamTrades } from './lib/binance.ts'
 import { kindOf } from './lib/labels.ts'
 import { mineSalt, predictToken, randomSeed } from './lib/salt.ts'
+import { fourEnabled, type Venue } from './lib/venue.ts'
 import { accountOf, clearKey, loadKey, newKey, saveKey, type StoredKey } from './lib/tradingKey.ts'
 import { connectDev, connectInjected, discoverInjected, type InjectedInfo, type Wallet } from './lib/wallet.ts'
 
@@ -447,12 +448,24 @@ function useAppState() {
     }
   }, [wallet, toast, refreshUser, quoteNative, quoteSymbol])
 
-  /** Mines a salt, then Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)). */
+  /** Flap: mines a salt, then Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)).
+   *  Four: FourRail.createLaunch(cfg) (no salt, no fee). */
   const createLaunch = useCallback(
     /** `draft` may be a function: it is called once the salt is mined, right before the wallet prompt, so a
      *  short settlement ("1 min") is measured from then, not from the click. */
-    async (draft: Omit<LaunchConfig, 'salt'> | (() => Omit<LaunchConfig, 'salt'>), onStage?: (s: string) => void): Promise<boolean> => {
+    async (draft: Omit<LaunchConfig, 'salt'> | (() => Omit<LaunchConfig, 'salt'>), onStage?: (s: string) => void, venue: Venue = 'flap'): Promise<boolean> => {
       if (!wallet || !config) return false
+      if (venue === 'four' && fourEnabled(config)) {
+        onStage?.('Confirm in wallet · Four.meme launch')
+        const cfg = typeof draft === 'function' ? draft() : draft
+        const rc = await runTx(
+          'Create launch',
+          () => chainLib.createFourLaunch(wallet.client, wallet.account, config.fourRail!, { ...cfg, salt: chainLib.ZERO_SALT }),
+          'Launch created: trading opens once the sequencer indexes it',
+        )
+        refreshLaunches()
+        return !!rc
+      }
       onStage?.('Mining a …7777 token address')
       let salt: Hex
       try {

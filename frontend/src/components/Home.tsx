@@ -32,7 +32,7 @@ export function Home() {
           </h1>
           <p className="muted">
             Every launch is an Up/Down bet on a real price. Winners are paid, the cut fills the coin's pool, and if it hits the target at settlement the
-            coin launches on Flap. Losers get the tokens.
+            coin launches on Flap or Four.meme. Losers get the tokens.
           </p>
         </div>
         <a className="btn primary big" href="#/create">

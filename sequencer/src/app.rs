@@ -19,6 +19,8 @@ pub struct Settings {
     /// RPC URL the frontend should use.
     pub public_rpc: String,
     pub factory: Address,
+    /// OpenFour rail (`FourRail`, also the factory of Four launches); address(0) = Flap only.
+    pub four_rail: Address,
     pub portal: Address,
     pub batch_ms: u64,
     pub poll_ms: u64,

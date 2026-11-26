@@ -19,6 +19,8 @@ export interface Config {
   rpc: string
   exchange: Address
   factory: Address
+  /** OpenFour rail (FourRail): the factory of Four.meme launches. Zero/absent = Flap only. */
+  fourRail?: Address
   portal: Address
   saltLockFee: string
   minTarget: string

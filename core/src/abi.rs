@@ -71,6 +71,9 @@ alloy_sol_types::sol! {
 
     interface IExchange {
         function setFactory(address factory) external;
+        /// Factories besides `factory` (the OpenFour rail) that may register launches.
+        function setExtraFactory(address factory, bool on) external;
+        function extraFactory(address factory) external view returns (bool);
         function setOperator(address op, bool on) external;
         function setFeed(address feed, bool enabled) external;
         function setMinTarget(uint256 bnb) external;
@@ -150,6 +153,15 @@ alloy_sol_types::sol! {
         event ChallengeWindowSet(uint64 seconds_);
         event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice,
             uint128 amount);
+    }
+
+    /// OpenFour (Four.meme) rail and launch factory (contracts/src/openfour/FourRail.sol).
+    interface IFourRail {
+        function createLaunch(LaunchConfig calldata c) external returns (uint256 launchId);
+        /// `sig`: Core.signer's EIP-191 signature of `createDigest(id, validTimestamp)`.
+        function graduate(uint256 id, uint256 validTimestamp, bytes calldata sig) external;
+        function createDigest(uint256 id, uint256 validTimestamp) external view returns (bytes32);
+        function quoteAsset() external view returns (address);
     }
 
     interface IAggregator {
