@@ -67,7 +67,7 @@ function ConnectList() {
 }
 
 function Connected() {
-  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, tradingReady, needsApproval, exchangeBalance, enableTrading, forgetKey, disconnect, launches } = useApp()
+  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, tradingReady, needsApproval, exchangeBalance, available, enableTrading, forgetKey, disconnect, launches } = useApp()
   const native = isNative(quoteToken)
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
   const [amt, setAmt] = useState('')
@@ -106,13 +106,10 @@ function Connected() {
       {!native ? (
         <>
           <div className="bal-card">
-            <div className="muted small">Available to trade</div>
-            <div className="bal-big mono">{bal != null ? fmtBnb(bal, 4) : '…'} {q}</div>
+            <div className="muted small">Available</div>
+            <div className="bal-big mono">{available != null ? fmtBnb(available, 4) : '…'} {q}</div>
             <div className="muted small">
-              {bal != null && usd(bal, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
-            </div>
-            <div className="muted small">
-              Wallet: {walletBalance != null ? fmtBnb(walletBalance, 4) : '…'} {q} · trades are paid from and to your wallet, no deposit needed
+              {available != null && usd(available, quoteUsd)} {locked > 0n && <>· {fmtBnb(locked, 4)} in open orders</>}
             </div>
           </div>
           {exchangeBalance != null && exchangeBalance > 0n && (

@@ -302,6 +302,17 @@ function useAppState() {
   // ERC20 quote: trading also needs the one-time approve (batches pull straight from the wallet).
   const needsApproval = !quoteNative && allowance != null && allowance < chainLib.APPROVED_MIN
   const tradingReady = keyState === 'active' && !needsApproval
+  // What the user can spend, net of open orders. ERC20 quote before the approve: the sequencer can't pull anything
+  // yet, so show the wallet (+ any old exchange balance) instead of 0.
+  const locked = user ? BigInt(user.locked) : 0n
+  const available: bigint | null =
+    !quoteNative && (allowance == null || allowance < chainLib.APPROVED_MIN)
+      ? walletBalance != null
+        ? walletBalance + (exchangeBalance ?? 0n) - locked
+        : null
+      : user
+        ? BigInt(user.balance) - locked
+        : null
 
   const refreshUser = useCallback(() => {
     if (!wallet) return
@@ -556,6 +567,7 @@ function useAppState() {
     keyState,
     needsApproval,
     tradingReady,
+    available,
     exchangeBalance,
     enableTrading,
     forgetKey,

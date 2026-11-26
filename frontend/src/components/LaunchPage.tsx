@@ -111,7 +111,7 @@ export function LaunchPage({ id }: { id: number }) {
   const position = pos ? { up: big(pos.up), down: big(pos.down) } : null
   const mine = user?.launches.find((x) => String(x.launchId) === String(id)) ?? null
   const orders = (user?.orders ?? []).filter((o) => String(o.launchId) === String(id) && (!o.status || o.status === 'open'))
-  const balance = user ? big(user.balance) - big(user.locked) : null
+  const balance = app.available
   const tradable = phase === 'live'
   const settled = phase === 'graduated' || phase === 'graduating' || phase === 'failed' || phase === 'void'
   const labels = labelsFor(l)
