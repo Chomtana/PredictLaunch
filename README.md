@@ -67,8 +67,8 @@ x1000 the BNB one. `QUOTE=bnb scripts/dev.sh` runs with native BNB instead (`QUO
 the Flap Portal by calling `whitelist(factory)` on Flap's testnet helper
 `0x77779969a11eff7582f3bCf48135A846A3457777` (anyone may call it; it exists on testnet only), then
 reads `Portal.launcherFactoryMultiplier(factory)` back and fails unless it is `(true, 10000)`. By default it
-enables only the feeds with a Chainlink fallback (BTCB, BNB, CAKE, USDT), because the Exchange can't read the
-others until Atlas authorizes it (see Known limitations). The deployer needs about 0.012 tBNB.
+enables only the feeds with a Chainlink fallback (BTCB, BNB, BTC, ETH, CAKE, USDT), because the Exchange can't read the
+others until Atlas authorizes it (BNB, BTC and ETH are open-read Atlas feeds and settle on Atlas directly) (see Known limitations). The deployer needs about 0.012 tBNB.
 
 ```bash
 set -a; . ./.env; set +a
@@ -131,7 +131,7 @@ cd frontend && pnpm vitest run
 
 - **Atlas feeds only serve authorized contracts.** On live testnet the Atlas team must call
   `setAuthorizedCallers([exchange], [true])` on each feed a launch uses. Until then `snapshot` falls
-  back to Chainlink for BTCB/USD, BNB/USD, CAKE/USD and USDT/USD (`setFallbackFeed`, set by the
+  back to Chainlink for BTCB/USD, CAKE/USD and USDT/USD (BNB/USD, BTC/USD and ETH/USD are open-read, so they need no authorization) (`setFallbackFeed`, set by the
   deploy script; the price is scaled from 8 to 18 decimals and `SnapshotSource` names the source).
   Launches on any other feed can't snapshot: the market goes Void after the grace window, everyone
   redeems at 0.50 and the launch fails, so by default the deploy script doesn't enable those feeds

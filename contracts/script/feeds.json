@@ -1,6 +1,8 @@
 [
   {"address": "0xe20536bc715aac6560394e33deb66ed205aeec33", "chainlink": "0x5741306c21795FdCBb9b265Ea0255F499DFe515C", "symbol": "BTCB/USD"},
-  {"address": "0xb3d1614bf894e68add1ea50ca250c152bad5256f", "chainlink": "0x2514895c72f50D8bd4B4F9b1110F0D6bD2c97526", "symbol": "BNB/USD"},
+  {"address": "0x3957d289ee9c38272377786787ea34f9dd29788d", "chainlink": "0x2514895c72f50D8bd4B4F9b1110F0D6bD2c97526", "symbol": "BNB/USD"},
+  {"address": "0x83b2f2c20df36f166cf5b3f017204cbb7babcad0", "chainlink": "0x5741306c21795FdCBb9b265Ea0255F499DFe515C", "symbol": "BTC/USD"},
+  {"address": "0x35369decd8c662954b3d24acc2a862c708a34fd2", "chainlink": "0x143db3CEEfbdfe5631aDD3E50f7614B6ba708BA7", "symbol": "ETH/USD"},
   {"address": "0xed2ce62b7bfdd31876b1e956a672e8fbe8b29403", "chainlink": "0x0000000000000000000000000000000000000000", "symbol": "ANKR/USD"},
   {"address": "0x060d5be909a3f775ddc239d982e4fe46879bce4a", "chainlink": "0x81faeDDfeBc2F8Ac524327d70Cf913001732224C", "symbol": "CAKE/USD"},
   {"address": "0xee9483fd2d380384d42326143f4bc9bd0513234d", "chainlink": "0x0000000000000000000000000000000000000000", "symbol": "ASTER/USD"},

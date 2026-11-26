@@ -50,10 +50,10 @@ async function idle() {
 async function main() {
   const creator = privateKeyToAccount(ANVIL_KEYS[4])
   const now = await S.chainNow()
-  const strike = await S.feedPrice(FEEDS.BTCB)
+  const strike = await S.feedPrice(FEEDS.BTC)
   const settleTime = now + SETTLE_IN
   const { id, token, rail } = await S.createLaunch(creator, {
-    name: 'E2E Coin', symbol: 'E2E', imageURI: '', feed: FEEDS.BTCB, strike, settleTime, cutBps: CUT, target: parseEther('2.15') * K, question: '', marketId: 0n,
+    name: 'E2E Coin', symbol: 'E2E', imageURI: '', feed: FEEDS.BTC, strike, settleTime, cutBps: CUT, target: parseEther('2.15') * K, question: '', marketId: 0n,
   })
   log(`launch #${id} token ${token}, strike ${Number(strike) / 1e18}, settles at ${settleTime} (in ${SETTLE_IN} s)`)
   check(token.toLowerCase().endsWith('7777'), `token ${token} ends in 7777`)

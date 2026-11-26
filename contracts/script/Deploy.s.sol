@@ -24,7 +24,8 @@ import {ITestnetFactoryWhitelist, TESTNET_FACTORY_WHITELIST} from "src/flap/ITes
 ///        DEPLOY_JSON (output path, default ../.dev/deploy.json)
 ///
 /// Feeds: Atlas feeds only serve EOAs and callers their admin authorized, so on real testnet the Exchange can only
-/// settle a feed that has a Chainlink fallback (BTCB, BNB, CAKE, USDT) until Atlas authorizes it. By default only
+/// settle a feed that has a Chainlink fallback (BTCB, BNB, BTC, ETH, CAKE, USDT) until Atlas authorizes it. BNB, BTC
+/// and ETH are open-read Atlas feeds, read directly; their fallback is only a backstop. By default only
 /// those feeds are enabled, so no launch can be created on a feed that cannot settle. ALL_FEEDS=true enables every
 /// feed; use it on an anvil fork together with script/fork-setup.sh (which writes the Atlas authorization with a
 /// cheat RPC), or on testnet once Atlas has authorized the Exchange.

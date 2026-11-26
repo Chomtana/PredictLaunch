@@ -174,8 +174,10 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   `latestRoundData()` scaled from its `decimals()` to 18 decimals (strike units). The same
   updatedAt/answer/window rules apply to whichever source is used; with no fallback the Atlas revert
   bubbles up. Emits `Snapshot` (unchanged) then `SnapshotSource(launchId, source)`. Deploy sets
-  fallbacks from `contracts/script/feeds.json` (`chainlink` field): BTCB/USD, BNB/USD, CAKE/USD,
-  USDT/USD (8-decimal testnet aggregators).
+  fallbacks from `contracts/script/feeds.json` (`chainlink` field): BTCB/USD, BNB/USD, BTC/USD, ETH/USD,
+  CAKE/USD, USDT/USD (8-decimal testnet aggregators). The Atlas BNB/USD (`0x3957…788d`, replaced
+  `0xb3d1…256f` on 2026-11-26), BTC/USD and ETH/USD feeds are open-read (`isOpenRead() == true`), so the
+  Exchange reads them directly and their fallback is only a backstop.
 - `resolve(id)`: block.timestamp ≥ settleTime + MAX_LAG and (snapped ∨ block.timestamp > settleTime
   + GRACE). Outcome: Void if not snapped; else Up iff settlePrice ≥ strike. Non-void: `raised =
   pairs × cut / 10000`, `totalLoserShares = pairs`; then `raised ≥ target` → Graduating, else →

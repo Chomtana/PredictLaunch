@@ -160,7 +160,7 @@ async fn config_shape() {
         Address::repeat_byte(0xFA)
     );
     let feeds = v["feeds"].as_array().unwrap();
-    assert_eq!(feeds.len(), 18);
+    assert_eq!(feeds.len(), 20);
     assert!(feeds.iter().any(|f| f["symbol"] == "BTCB/USD"));
     assert!(feeds[0].get("intervals").is_none());
     assert_eq!(v["devFaucet"], json!(false));

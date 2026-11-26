@@ -29,12 +29,14 @@ pub const ONE_BNB: u128 = 10u128.pow(18);
 
 pub const PORTAL: Address = address!("000042108465206185A077Edc3F3fd2b49060000");
 /// Atlas BNB/USD (BSC testnet): always streamed for the USD estimate.
-pub const BNB_USD_FEED: Address = address!("b3d1614bf894e68add1ea50ca250c152bad5256f");
+pub const BNB_USD_FEED: Address = address!("3957d289ee9c38272377786787ea34f9dd29788d");
 
 /// The spec's feed table (BSC testnet Atlas SingleFeeds). FDUSD and VAI are excluded.
-pub const FEEDS: [(&str, Address); 18] = [
+pub const FEEDS: [(&str, Address); 20] = [
     ("BTCB/USD", address!("e20536bc715aac6560394e33deb66ed205aeec33")),
-    ("BNB/USD", address!("b3d1614bf894e68add1ea50ca250c152bad5256f")),
+    ("BNB/USD", address!("3957d289ee9c38272377786787ea34f9dd29788d")),
+    ("BTC/USD", address!("83b2f2c20df36f166cf5b3f017204cbb7babcad0")),
+    ("ETH/USD", address!("35369decd8c662954b3d24acc2a862c708a34fd2")),
     ("ANKR/USD", address!("ed2ce62b7bfdd31876b1e956a672e8fbe8b29403")),
     ("CAKE/USD", address!("060d5be909a3f775ddc239d982e4fe46879bce4a")),
     ("ASTER/USD", address!("ee9483fd2d380384d42326143f4bc9bd0513234d")),

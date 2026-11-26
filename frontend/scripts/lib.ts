@@ -32,7 +32,8 @@ export const ANVIL_KEYS: Hex[] = [
 
 export const FEEDS = {
   BTCB: '0xe20536bc715aac6560394e33deb66ed205aeec33' as Address,
-  BNB: '0xb3d1614bf894e68add1ea50ca250c152bad5256f' as Address,
+  BNB: '0x3957d289ee9c38272377786787ea34f9dd29788d' as Address,
+  BTC: '0x83b2f2c20df36f166cf5b3f017204cbb7babcad0' as Address,
 }
 
 export const feedAbi = parseAbi([

@@ -17,6 +17,10 @@ Things the SPEC left open, or that the real chain forced, and how the contracts 
    - **Live testnet: the Exchange cannot `snapshot` until Atlas authorizes it** (ask the Atlas team to call
      `setAuthorizedCallers([exchange],[true])` on the feed used). Without it `snapshot` reverts, the market goes
      Void at `settleTime + GRACE` and the launch fails (everyone redeems at 0.50), so no graduation.
+   - **2026-11-26: Atlas replaced BNB/USD with `0x3957d289…788d` and added BTC/USD `0x83b2f2c2…cad0` and ETH/USD
+     `0x35369dec…4fd2`.** These three are open-read (`isOpenRead() == true`): any contract can read them, no
+     authorization needed. The old BNB feed `0xb3d1…256f` was delisted and stopped updating (frozen at 539.63).
+     `test/fork/FeedFork.t.sol` still pins the old feeds' authorization behaviour.
    - **Chainlink fallback (added in integration):** `setFallbackFeed(atlas, chainlink)`; `snapshot` reads Atlas
      first and, if it reverts or answers <= 0, the Chainlink AggregatorV3 (scaled from `decimals()` to 18). So on live
      testnet BTCB, BNB, CAKE and USDT launches settle on Chainlink until Atlas authorizes the Exchange; the other feeds

@@ -4,7 +4,7 @@
 //     --rpc http://127.0.0.1:8545 --deploy ../.dev/deploy.json [--live]
 //
 // Creates 2 launches through Portal.newLauncher + our factory (anvil #3 is the creator):
-//   BTCB: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB (2,150 USDT)
+//   BTC: strike = current price, settles in 15 min, cut 10%, target 2.15 BNB (2,150 USDT)
 //   BNB:  strike = current price + 1%, settles in 30 min, cut 30%, target 3 BNB (3,000 USDT)
 // Plus one question launch (SPEC "Question launches"): resolves "Will it rain in Boston on <tomorrow>?"
 // through /api/cournot/resolve, takes the first market, settles in 20 min, cut 10%, target 2.15 BNB;
@@ -46,10 +46,10 @@ interface Mkt {
 
 async function createPair(): Promise<Mkt[]> {
   const now = await S.chainNow()
-  const btc = await S.feedPrice(FEEDS.BTCB)
+  const btc = await S.feedPrice(FEEDS.BTC)
   const bnb = await S.feedPrice(FEEDS.BNB)
   const defs = [
-    { name: 'Bitcoin Believer', symbol: 'BELIEVE', feed: FEEDS.BTCB, strike: btc, settleTime: now + 15n * 60n, cutBps: 1000, target: parseEther('2.15') * K },
+    { name: 'Bitcoin Believer', symbol: 'BELIEVE', feed: FEEDS.BTC, strike: btc, settleTime: now + 15n * 60n, cutBps: 1000, target: parseEther('2.15') * K },
     { name: 'BNB Moon', symbol: 'BMOON', feed: FEEDS.BNB, strike: (bnb * 101n) / 100n, settleTime: now + 30n * 60n, cutBps: 3000, target: parseEther('3') * K },
   ]
   const out: Mkt[] = []
