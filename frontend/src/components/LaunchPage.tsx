@@ -117,7 +117,6 @@ export function LaunchPage({ id }: { id: number }) {
   const labels = labelsFor(l)
   const yesMid = midUp(b)
   const qText = l.question || `Question #${id}`
-  const probability = oracle?.opening?.probability ?? l.oracleProbability ?? null
 
   return (
     <div className="page">
@@ -133,8 +132,6 @@ export function LaunchPage({ id }: { id: number }) {
               phase={phase}
               now={now}
               yesMid={yesMid}
-              probability={probability}
-              source={oracle?.opening?.source ?? l.oracleSource ?? null}
             />
           ) : (
           <PriceHeader
@@ -154,7 +151,7 @@ export function LaunchPage({ id }: { id: number }) {
           {settled && <OutcomePanel l={l} phase={phase} mine={mine} />}
           {isQ ? (
             <>
-              <CournotPanel question={qText} oracle={oracle} probability={l.oracleProbability} source={l.oracleSource} bookYes={yesMid} />
+              <CournotPanel question={qText} oracle={oracle} />
               <SettlementPanel oracle={oracle} settleTime={settleTime} now={now} resolved={l.resolved} outcome={n(l.outcome)} />
             </>
           ) : (

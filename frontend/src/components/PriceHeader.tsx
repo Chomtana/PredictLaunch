@@ -3,8 +3,6 @@ import { fmtPrice, fmtUsd, num18 } from '../lib/units.ts'
 import type { Phase } from './LaunchCard.tsx'
 import { AssetBadge, CoinAvatar, Spinner } from './ui.tsx'
 import { StatusChip } from './LaunchCard.tsx'
-import type { OracleSource } from '../lib/api.ts'
-import { SourceBadge, pct } from './Cournot.tsx'
 
 /** "Will BTC be ≥ $100,000 at Nov 26, 12:00?" */
 export const question = (feedSym: string, strike: bigint, settleTime: number) => `Will ${asset(feedSym)} be ≥ ${fmtPrice(strike)} at ${settleLabel(settleTime)}?`
@@ -85,7 +83,7 @@ export function PriceHeader(p: {
   )
 }
 
-/** Header for a question launch: the question as the title, YES on the book vs the Cournot opening, countdown. */
+/** Header for a question launch: the question as the title, YES on the book, countdown. */
 export function QuestionHeader(p: {
   name: string
   symbol: string
@@ -96,8 +94,6 @@ export function QuestionHeader(p: {
   now: number
   /** YES mid on the book, cents */
   yesMid: number | null
-  probability: number | null
-  source: OracleSource | null
 }) {
   const left = p.settleTime - p.now
   const cd = countdown(left)
@@ -113,7 +109,6 @@ export function QuestionHeader(p: {
             </span>
             <span>·</span>
             <span>Cournot question · settles {settleLabel(p.settleTime)}</span>
-            <SourceBadge source={p.source} />
             <StatusChip phase={p.phase} />
           </div>
         </div>
@@ -122,11 +117,6 @@ export function QuestionHeader(p: {
         <div className="ph-stat">
           <div className="label">YES on the book</div>
           <div className="value num up">{p.yesMid != null ? `${p.yesMid}¢` : '—'}</div>
-        </div>
-        <div className="ph-sep" />
-        <div className="ph-stat">
-          <div className="label">Cournot opening</div>
-          <div className="value num">{pct(p.probability)}</div>
         </div>
         {p.phase === 'live' ? (
           <div className={`countdown ${left > 3600 ? 'calm' : ''}`} aria-label="Time to settlement">

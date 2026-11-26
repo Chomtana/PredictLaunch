@@ -23,7 +23,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { parseEther } from 'viem'
 import { NATIVE } from '../src/lib/chain.ts'
 import { ANVIL_KEYS, E18, FEEDS, UNIT, arg, fairUpCents, niceStrike, oracleCents, setup, sleep, tomorrowLabel, type Bot } from './lib.ts'
-import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, pick, shuffle, type Asset, type Meme } from './seed-catalog.ts'
+import { ICONS, PRICE_MEMES, QUESTIONS, STRIKE_STEP, isPriceMarket, pick, shuffle, type Asset, type Meme } from './seed-catalog.ts'
 
 const RPC = arg('rpc', 'http://127.0.0.1:8545')!
 const API = arg('api', 'http://127.0.0.1:8787')!
@@ -102,7 +102,7 @@ async function createQuestion(): Promise<Mkt | null> {
     const search = theme.search.replace('{tomorrow}', tomorrowLabel())
     let market: ResolvedMarket | undefined
     try {
-      market = (await resolve(search)).find((m) => m.title && Buffer.byteLength(m.title) <= 280)
+      market = (await resolve(search)).find((m) => m.title && Buffer.byteLength(m.title) <= 280 && !isPriceMarket(m.title))
     } catch (e) {
       console.log(`seed: Cournot resolve failed for "${search}" (${(e as Error).message.split('\n')[0]})`)
       continue

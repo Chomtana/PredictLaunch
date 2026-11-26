@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { parseEther } from 'viem'
 import { describe, expect, it } from 'vitest'
 import { niceStrike, oracleCents, tomorrowLabel } from './lib.ts'
-import { allImages, PRICE_MEMES, QUESTIONS } from './seed-catalog.ts'
+import { allImages, isPriceMarket, PRICE_MEMES, QUESTIONS } from './seed-catalog.ts'
 
 describe('seed helpers for the question launch', () => {
   it('tomorrow as Cournot names daily markets', () => {
@@ -52,5 +52,34 @@ describe('seed catalog', () => {
   it('serves every image from public/', () => {
     // vitest runs from frontend/ (import.meta.url is not a file: URL under jsdom)
     for (const p of allImages()) expect(existsSync(join(process.cwd(), 'public', p)), p).toBe(true)
+  })
+})
+
+describe('seed question themes are real-world events', () => {
+  it('flags asset-price markets', () => {
+    for (const t of [
+      'Bitcoin price above $150,000 at any time before 2027-01-01 04:59 UTC',
+      'Will Bitcoin dip to $55,000 by December 31, 2026?',
+      'Ethereum price above $5,000 at 2027-01-01 05:00 UTC',
+      'Will Gold (XAUUSD) hit (HIGH) $3,800 Week of November 23 2026?',
+      'Will Apple (AAPL) close above $340 end of November?',
+      "Will Apple's market capitalization be less than $3.50T at the end of 2026?",
+    ])
+      expect(isPriceMarket(t), t).toBe(true)
+  })
+  it('keeps event markets', () => {
+    for (const t of [
+      'Will it rain in Chicago on Nov 26, 2026?',
+      'Will the Federal Reserve Cut rates by 25bps at their December 2026 meeting?',
+      'Will SpaceX launch another Starship before Dec 15, 2026?',
+      'Will Elon Musk post 1400+ tweets in December 2026?',
+      'Will OpenAI release GPT-7 before Mar 1, 2027? (Yes: Before March, 2027)',
+      'Buffalo wins',
+      'Will Inter win the Champions League?',
+    ])
+      expect(isPriceMarket(t), t).toBe(false)
+  })
+  it('no catalog theme searches for a price', () => {
+    for (const q of QUESTIONS) expect(isPriceMarket(q.search), q.search).toBe(false)
   })
 })

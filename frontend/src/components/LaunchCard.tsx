@@ -4,7 +4,6 @@ import { fmtPrice, usd, fmtAmt } from '../lib/units.ts'
 import { useApp, useQuote } from '../state.tsx'
 import { AssetBadge, CoinAvatar, ProgressBar } from './ui.tsx'
 import { labelsFor } from '../lib/labels.ts'
-import { SourceBadge, pct } from './Cournot.tsx'
 
 export type Phase = 'live' | 'settling' | 'graduating' | 'graduated' | 'failed' | 'void'
 
@@ -78,13 +77,7 @@ export function LaunchCard({ l, now }: { l: LaunchSummary; now: number }) {
           <span className="up">
             {L.names[0]} {up != null ? `${up}¢` : '—'}
           </span>
-          {isQ ? (
-            l.oracleProbability != null && (
-              <span className="muted small">
-                oracle {pct(l.oracleProbability, 0)} {l.oracleSource === 'mock' && <SourceBadge source="mock" />}
-              </span>
-            )
-          ) : cur != null && (
+          {!isQ && cur != null && (
             <span className={`muted small ${above ? 'up' : 'down'}`}>
               now {fmtPrice(cur)} {above ? '▲' : '▼'}
             </span>

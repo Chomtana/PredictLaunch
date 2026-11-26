@@ -136,7 +136,7 @@ export function toUnixSec(v: Num | null | undefined): number {
 
 const COURNOT_ERRORS: Record<string, string> = {
   cournot_unavailable: 'The Cournot oracle is unreachable right now. Try again in a moment.',
-  payment_required: 'Cournot asked for payment (402). The sequencer needs a COURNOT_API_KEY, or run it with COURNOT_MODE=mock.',
+  payment_required: 'Cournot is unavailable right now (402). Try again later.',
   bad_question: 'Cournot rejected the question: it must be 1–280 bytes and a clear yes/no claim.',
   rate_limited: 'Too many requests: wait a couple of seconds and try again.',
 }

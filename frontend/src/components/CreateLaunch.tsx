@@ -7,7 +7,7 @@ import { fmtBnb, fmtPrice, num18, parseBnb, usd, fmtAmt } from '../lib/units.ts'
 import { PRICE_LABELS, QUESTION_LABELS } from '../lib/labels.ts'
 import { useApp } from '../state.tsx'
 import { CoinAvatar, Spinner } from './ui.tsx'
-import { MarketRow, OracleRecordView, SourceBadge } from './Cournot.tsx'
+import { MarketRow } from './Cournot.tsx'
 
 export type LaunchDraft = Omit<LaunchConfig, 'salt'>
 
@@ -83,8 +83,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
   const [markets, setMarkets] = useState<CournotMarket[] | null>(null)
   const [finding, setFinding] = useState(false)
   const [pick, setPick] = useState<Choice>(null)
-  const [preview, setPreview] = useState<OracleRecord | null>(null)
-  const [previewing, setPreviewing] = useState(false)
+  const [linking, setLinking] = useState(false)
   const [cnErr, setCnErr] = useState<string | null>(null)
   const [settleNote, setSettleNote] = useState<string | null>(null)
 
@@ -132,9 +131,21 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
   const L = isQ ? QUESTION_LABELS.names : PRICE_LABELS.names
   const delta = current && strikeWei ? (num18(strikeWei) / num18(current) - 1) * 100 : null
 
-  const submit = () => {
-    if (!valid || !connected || busy) return
+  const submit = async () => {
+    if (!valid || !connected || busy || linking) return
     if (isQ) {
+      // Tell the sequencer which market the creator picked (Cournot ids change per call, so it matches
+      // by title + end time). The answer is never shown: traders must not see the oracle beforehand.
+      if (pick?.market) {
+        setLinking(true)
+        try {
+          await cournot.probability(questionText.trim(), pick.id, { title: pick.market.title, endTime: pick.market.endTime })
+        } catch {
+          /* the sequencer still finds the market by the question text */
+        } finally {
+          setLinking(false)
+        }
+      }
       void onSubmit({
         name: name.trim(),
         symbol: symbol.trim(),
@@ -169,7 +180,6 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
     setFinding(true)
     setCnErr(null)
     setPick(null)
-    setPreview(null)
     try {
       const r = await cournot.resolve(claim)
       setMarkets(r.markets ?? [])
@@ -182,7 +192,6 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
   }
   const choose = (c: Choice) => {
     setPick(c)
-    setPreview(null)
     setCnErr(null)
     setSettleNote(null)
     const end = c?.market ? toUnixSec(c.market.endTime) : NaN
@@ -193,22 +202,6 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
       setSettleNote(`prefilled with the market's end time (${settleLabel(end)})`)
     } else setSettleNote(`the market ends ${settleLabel(end)}, outside the ${duration(config.minDuration)} to ${duration(config.maxDuration)} limit: pick a time yourself`)
   }
-  // A paid call in live mode: only on the explicit button, never automatically.
-  const getOdds = async () => {
-    if (!pick || !claim || previewing) return
-    setPreviewing(true)
-    setCnErr(null)
-    try {
-      setPreview(await (pick.id === 'none' || !pick.market
-        ? cournot.probability(claim, 0)
-        : cournot.probability(claim, pick.id, { title: pick.market.title, endTime: pick.market.endTime })))
-    } catch (e) {
-      setCnErr(cournotError(e))
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
   const setStrikeFromCurrent = (pct: number) => {
     if (current == null) return
     setStrikeTouched(true)
@@ -221,7 +214,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
         className="panel create-form"
         onSubmit={(e) => {
           e.preventDefault()
-          submit()
+          void submit()
         }}
       >
         <h2>Create a launch</h2>
@@ -275,8 +268,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
                   placeholder="Will it rain in Boston on Nov 27, 2026?"
                   onChange={(e) => {
                     setQuestionText(e.target.value)
-                    setPreview(null)
-                  }}
+                                  }}
                 />
                 <div className="chips">
                   <button type="button" className="chip" disabled={!claim || bytes(claim) > QUESTION_MAX_BYTES || finding} onClick={() => void findMarkets()}>
@@ -288,7 +280,7 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
             {markets && (
               <div className="field">
                 <span className="field-label">Cournot market</span>
-                <span className="field-hint">Match confidence is unreliable: read the titles and pick the market that really is your question.</span>
+                <span className="field-hint">Read the titles and pick the market that really is your question.</span>
                 <div className="cn-markets" role="radiogroup" aria-label="Cournot market">
                   {markets.length === 0 && <div className="muted small">No open markets matched.</div>}
                   {markets.map((m) => (
@@ -302,21 +294,6 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
                     </div>
                   </label>
                 </div>
-              </div>
-            )}
-            {pick && (
-              <div className="field">
-                <div className="input-with-chips">
-                  <button type="button" className="btn" disabled={previewing} onClick={() => void getOdds()}>
-                    {previewing ? <Spinner /> : null} Get Cournot odds
-                  </button>
-                  {config.cournotMode === 'mock' ? (
-                    <SourceBadge source="mock" />
-                  ) : (
-                    <span className="muted small">May be a paid Cournot call; the launch reuses this preview.</span>
-                  )}
-                </div>
-                {preview && <OracleRecordView r={preview} />}
               </div>
             )}
             {cnErr && (
@@ -410,10 +387,10 @@ export function CreateLaunchForm({ config, priceOf, quoteUsd, connected, onSubmi
           <input id="cl-target" inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value)} />
         </Field>
 
-        <button type="submit" className="btn primary big" disabled={!valid || !connected || !!busy}>
-          {busy ? (
+        <button type="submit" className="btn primary big" disabled={!valid || !connected || !!busy || linking}>
+          {busy || linking ? (
             <>
-              <Spinner /> {busy}
+              <Spinner /> {busy ?? 'Linking the Cournot market…'}
             </>
           ) : connected ? (
             'Create launch'

@@ -34,7 +34,7 @@ describe('api client', () => {
     expect(JSON.parse(String(calls[1][1]?.body))).toEqual({ message: 'Will it rain?', marketId: 2849008 })
 
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: 'payment_required', message: '402' }), { status: 402 }))
-    expect(cournotError(await api.cournotProbability('q', 1).catch((x: unknown) => x))).toMatch(/payment/i)
+    expect(cournotError(await api.cournotProbability('q', 1).catch((x: unknown) => x))).toMatch(/unavailable/i)
     expect(cournotError(new ApiError('cournot_unavailable', ''))).toMatch(/unreachable/)
     expect(cournotError(new ApiError('bad_question', ''))).toMatch(/280 bytes/)
     expect(cournotError(new ApiError('http_503', ''))).toMatch(/unreachable/)

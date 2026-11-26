@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Address } from 'viem'
 import { ApiError, type Config } from '../lib/api.ts'
 import { CreateLaunchForm, toLocalInput } from './CreateLaunch.tsx'
@@ -69,34 +69,29 @@ describe('CreateLaunchForm question mode', () => {
     expect(screen.getByLabelText(/Strike/)).toBeTruthy()
   })
 
-  it('resolve → pick → preview → launch builds feed 0, strike 0, question, marketId', async () => {
+  it('resolve → pick → launch links the market silently and builds feed 0, strike 0, question, marketId', async () => {
     const { cournot, onSubmit } = setup()
     expect(screen.queryByLabelText(/Strike/)).toBeNull()
     expect(submit().disabled).toBe(true) // a market must be picked first
     fireEvent.click(screen.getByRole('button', { name: /Find markets/ }))
     await screen.findByText(markets[1].title)
     expect(cournot.resolve).toHaveBeenCalledWith(Q)
-    expect(screen.getByText(/YES 93¢/)).toBeTruthy()
-    expect(screen.getByText(/confidence 85%/)).toBeTruthy()
+    // no live YES price, confidence, odds button or oracle mode on the form
+    expect(document.body.textContent).not.toMatch(/93|85%|simulated|mock/i)
+    expect(screen.queryByRole('button', { name: /odds/i })).toBeNull()
     expect(submit().disabled).toBe(true) // nothing preselected, even at high confidence
     fireEvent.click(screen.getAllByRole('radio')[0])
     expect((screen.getByLabelText(/Settlement/) as HTMLInputElement).value).toBe(toLocalInput(new Date(endMs)))
     expect(screen.getByText(/prefilled with the market's end time/)).toBeTruthy()
     expect(cournot.probability).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /Get Cournot odds/ }))
-    const rec = await screen.findByTestId('oracle-record')
-    expect(cournot.probability).toHaveBeenCalledTimes(1)
-    expect(cournot.probability).toHaveBeenCalledWith(Q, '2849008', { title: markets[0].title, endTime: markets[0].endTime })
-    expect(rec.textContent).toContain('93.4%')
-    expect(rec.textContent).toContain('Simulated oracle')
-    expect(rec.textContent).toContain('point_estimate')
-    expect(rec.textContent).toContain('Primary anchor')
-
     expect(submit().disabled).toBe(false)
     fireEvent.click(submit())
-    await Promise.resolve()
-    expect(onSubmit).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    // the pick reaches the sequencer before the launch, and its answer is never shown
+    expect(cournot.probability).toHaveBeenCalledTimes(1)
+    expect(cournot.probability).toHaveBeenCalledWith(Q, '2849008', { title: markets[0].title, endTime: markets[0].endTime })
+    expect(document.body.textContent).not.toMatch(/93|simulated|mock|trades at/i)
     const cfg = (onSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>
     expect(cfg.feed).toBe(ZERO)
     expect(cfg.strike).toBe(0n)
@@ -121,12 +116,14 @@ describe('CreateLaunchForm question mode', () => {
     expect(cfg.feed).toBe(ZERO)
   })
 
-  it('a 402 shows a friendly payment message', async () => {
-    setup({ resolve: vi.fn(async () => ({ markets })), probability: vi.fn(async () => Promise.reject(new ApiError('payment_required', 'HTTP 402'))) })
+  it('still launches when linking the market fails (e.g. a 402)', async () => {
+    const { onSubmit } = setup({ resolve: vi.fn(async () => ({ markets })), probability: vi.fn(async () => Promise.reject(new ApiError('payment_required', 'HTTP 402'))) })
     fireEvent.click(screen.getByRole('button', { name: /Find markets/ }))
-    fireEvent.click(await screen.findByRole('radio', { name: /No matching market/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Get Cournot odds/ }))
-    expect((await screen.findByRole('alert')).textContent).toMatch(/payment/i)
+    await screen.findByText(markets[1].title)
+    fireEvent.click(screen.getAllByRole('radio')[0])
+    fireEvent.click(submit())
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(((onSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>).marketId).toBe(2849008n)
   })
 
   it('rejects a question over 280 bytes', () => {

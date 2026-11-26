@@ -1388,78 +1388,6 @@ main {
 }
 
 /* ------------------------------------------------------------------ question launches (Cournot) */
-.cn-badge {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-weight: 700;
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-.cn-badge.mock {
-  background: var(--accent-bg);
-  color: var(--accent);
-  border: 1px dashed rgba(255, 159, 46, 0.5);
-}
-.cn-badge.live {
-  background: rgba(76, 141, 255, 0.12);
-  color: var(--blue);
-}
-.cn-scroll {
-  overflow-x: auto;
-  max-width: 100%;
-}
-.cn-table td,
-.cn-table th {
-  vertical-align: top;
-  word-break: break-word;
-}
-.cn-table code {
-  white-space: pre-wrap;
-}
-.cn-section {
-  margin-top: 12px;
-}
-.cn-h {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  font-weight: 700;
-  margin-bottom: 6px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.cn-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--text-2);
-  font-size: 13px;
-}
-.cn-list li + li {
-  margin-top: 4px;
-}
-.cn-record {
-  margin-top: 12px;
-  padding: 14px;
-  border-radius: 12px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  min-width: 0;
-}
-.cn-headline {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 6px;
-  flex-wrap: wrap;
-}
-.cn-pct {
-  font-family: var(--mono);
-  font-size: 22px;
-  font-weight: 700;
-}
 .cn-markets {
   display: flex;
   flex-direction: column;
@@ -1496,19 +1424,12 @@ textarea {
   justify-content: space-between;
   gap: 10px;
 }
-.cn-claim q,
-.cn-record q {
+.cn-claim q {
   color: var(--text);
 }
 .cn-claim {
   margin: 10px 0;
   font-size: 15px;
-}
-.cn-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-  margin: 12px 0;
 }
 .cn-kv {
   display: flex;

@@ -75,7 +75,8 @@ export interface QuestionTheme {
   images: string[]
 }
 
-/** `{tomorrow}` is replaced with tomorrowLabel() ("Nov 27, 2026"). */
+/** Real-world events only: no asset-price questions (those are what price launches are for).
+ *  `{tomorrow}` is replaced with tomorrowLabel() ("Nov 27, 2026"). */
 export const QUESTIONS: QuestionTheme[] = [
   {
     search: 'Will it rain in Boston on {tomorrow}?',
@@ -161,38 +162,6 @@ export const QUESTIONS: QuestionTheme[] = [
     images: [img('datacenter')],
   },
   {
-    search: 'Will Gold (XAUUSD) hit (HIGH) $3,800 this week?',
-    memes: [
-      { name: 'Boomer Rock', symbol: 'BOOMER' },
-      { name: 'Shiny Rock Szn', symbol: 'SHINY' },
-    ],
-    images: [img('gold')],
-  },
-  {
-    search: 'Will Apple (AAPL) close above $340 end of November?',
-    memes: [
-      { name: 'Fruit Company Pump', symbol: 'FRUIT' },
-      { name: 'One More Thing', symbol: '1MORE' },
-    ],
-    images: [img('apple-store')],
-  },
-  {
-    search: 'Will Bitcoin dip to $55,000 by December 31, 2026?',
-    memes: [
-      { name: 'Buy The Dip Daddy', symbol: 'BTDD' },
-      { name: 'Capitulation Station', symbol: 'CAPIT' },
-    ],
-    images: [img('btc-coin')],
-  },
-  {
-    search: 'Ethereum price above $5,000 at any time before 2027-01-01',
-    memes: [
-      { name: 'Five K Or Cope', symbol: 'COPE' },
-      { name: 'ETH Supercycle', symbol: 'SUPERCYC' },
-    ],
-    images: [img('eth-coin')],
-  },
-  {
     search: 'Will Manchester City win the English Premier League?',
     memes: [
       { name: 'Sky Blue Supremacy', symbol: 'SKYBLUE' },
@@ -238,6 +207,18 @@ export const QUESTIONS: QuestionTheme[] = [
     images: [img('lambeau')],
   },
 ]
+
+/**
+ * True for a Cournot market about an asset's price (crypto, metals, stocks, indices, FX): question
+ * launches are for real-world events only, so the seed skips these even when resolve ranks one first.
+ */
+export function isPriceMarket(title: string): boolean {
+  const t = title.toLowerCase()
+  if (/\b(bitcoin|btc|ethereum|eth|solana|sol|bnb|xrp|doge|dogecoin|crypto)\b/.test(t)) return true
+  if (/\b(gold|silver|oil|wti|brent|xau|xag|s&p|nasdaq|dow|spx|ndx|eur\/usd|usd\/jpy)\b/.test(t)) return true
+  if (/\([A-Z]{1,5}\)/.test(title) && /\b(close|finish|price|above|below|stock|shares?)\b/.test(t)) return true // "Apple (AAPL) close above"
+  return /\bprice\b|market cap/.test(t)
+}
 
 export const pick = <T>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)]
 

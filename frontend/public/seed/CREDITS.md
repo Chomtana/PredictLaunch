@@ -18,10 +18,6 @@ Downscaled copies of Wikimedia Commons files, used as logos for the demo seed's 
 | starship-sn8.jpg | [SpaceX_Starship_SN8_launch_as_viewed_from_South_Padre_Island.jpg](https://commons.wikimedia.org/wiki/File:SpaceX_Starship_SN8_launch_as_viewed_from_South_Padre_Island.jpg) | Forest Katsch | CC BY-SA 4.0 |
 | social.jpg | [Social_Media_App_Icons_On_The_Screen_of_A_Smartphone.jpg](https://commons.wikimedia.org/wiki/File:Social_Media_App_Icons_On_The_Screen_of_A_Smartphone.jpg) | mikemacmarketing | CC BY 2.0 |
 | datacenter.jpg | [CERN_Server_03.jpg](https://commons.wikimedia.org/wiki/File:CERN_Server_03.jpg) | Florian Hirzinger - www.fh-ap.com | CC BY-SA 3.0 |
-| gold.jpg | [Gold_bullion_bars.jpg](https://commons.wikimedia.org/wiki/File:Gold_bullion_bars.jpg) | Stevebidmead | CC0 |
-| apple-store.jpg | [Apple_Store_-_Fifth_Avenue_(7181848534).jpg](https://commons.wikimedia.org/wiki/File:Apple_Store_-_Fifth_Avenue_(7181848534).jpg) | Jorge Láscar from Australia | CC BY 2.0 |
-| btc-coin.jpg | [Close-up_of_a_Bitcoin_physical_coin_in_a_womans_hand_and_a_laptop_on_her_lap.jpg](https://commons.wikimedia.org/wiki/File:Close-up_of_a_Bitcoin_physical_coin_in_a_womans_hand_and_a_laptop_on_her_lap.jpg) | Shixart1985 | CC BY 2.0 |
-| eth-coin.jpg | [Close-up_of_a_physical_Ethereum_coin_(51002904687).jpg](https://commons.wikimedia.org/wiki/File:Close-up_of_a_physical_Ethereum_coin_(51002904687).jpg) | Ivan Radic | CC BY 2.0 |
 | etihad.jpg | [City_of_Manchester_Stadium_2023_cropped.jpg](https://commons.wikimedia.org/wiki/File:City_of_Manchester_Stadium_2023_cropped.jpg) | Arne Müseler, cropped by Blackcat | CC BY-SA 3.0 de |
 | old-trafford.jpg | [Manchester_United_Old_Trafford.jpg](https://commons.wikimedia.org/wiki/File:Manchester_United_Old_Trafford.jpg) | Arne Müseler | CC BY-SA 3.0 de |
 | stamford-bridge.jpg | [London_Stamford_Bridge.jpg](https://commons.wikimedia.org/wiki/File:London_Stamford_Bridge.jpg) | Arne Müseler | CC BY-SA 3.0 de |
