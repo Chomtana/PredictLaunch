@@ -15,7 +15,7 @@ export interface TradePanelProps {
   tradable: boolean
   book: Book | null
   position: { up: bigint; down: bigint } | null
-  /** free trading balance */
+  /** available to trade (ERC20: wallet funds; assumes the approve, which trading requires anyway) */
   balance: bigint | null
   keyReady: boolean
   connected: boolean
@@ -265,7 +265,7 @@ export function TradePanel(p: TradePanelProps) {
       <div className="tp-row">
         <span className="cut-badge">{p.cutBps / 100}% cut</span>
         <span className="muted small">
-          winners get {(10000 - p.cutBps) / 100}¢ · bal {p.balance != null ? fmtBnb(p.balance, 3) : '—'} {q}
+          winners get {(10000 - p.cutBps) / 100}¢ · available {p.balance != null ? fmtBnb(p.balance, 2) : '—'} {q}
         </span>
       </div>
     </div>
