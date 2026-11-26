@@ -240,6 +240,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     event TokensClaimed(uint256 launchId, address user, uint256 amount);
     event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount);
     event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
+    /// @notice ERC20 quote: fill `index` of batch `batchId` was not applied because `user` could no longer pay
+    ///         (wallet balance or allowance moved after the sequencer matched it).
+    event FillSkipped(uint64 batchId, uint256 index, address user);
     event QuestionSet(uint256 launchId, string question, uint256 marketId);
     event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
     event ResolverSet(address resolver);
@@ -414,6 +417,25 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     function withdrawRequest(uint64 idx) external view returns (WithdrawRequest memory) {
         return _withdraws[idx];
+    }
+
+    /// @notice What `u` can spend in a batch: the internal balance plus, for an ERC20 quote, what the Exchange
+    ///         may pull from the wallet (`min(balance, allowance)`).
+    function spendable(address u) public view returns (uint256) {
+        address q = quoteToken;
+        uint256 bal = balanceOf[u];
+        if (q == address(0)) return bal;
+        uint256 w = IERC20(q).balanceOf(u);
+        uint256 a = IERC20(q).allowance(u, address(this));
+        return bal + (w < a ? w : a);
+    }
+
+    /// @notice `spendable` for many users at once (the sequencer reads this every poll).
+    function funds(address[] calldata users) external view returns (uint256[] memory out) {
+        out = new uint256[](users.length);
+        for (uint256 i; i < users.length; ++i) {
+            out[i] = spendable(users[i]);
+        }
     }
 
     function _processWithdraw(uint64 idx, WithdrawRequest storage w) internal {
@@ -708,7 +730,7 @@ contract Exchange is Ownable, ReentrancyGuard {
                     if (lose > 0) loserShares[id][u] += lose;
                 }
             }
-            if (credit > 0) balanceOf[u] += credit;
+            if (credit > 0) _credit(u, credit);
             emit Redeemed(id, u, credit, lose);
         }
     }
@@ -823,7 +845,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         for (uint256 i; i < b.fills.length; ++i) {
             Fill calldata f = b.fills[i];
             if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
-            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, b.ts);
+            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, b.ts, i);
         }
 
         uint64 to = b.withdrawTo;
@@ -845,21 +867,29 @@ contract Exchange is Ownable, ReentrancyGuard {
         bytes32 th,
         bytes32 mh,
         Fill calldata f,
-        uint64 ts
+        uint64 ts,
+        uint256 idx
     ) internal {
         uint128 amt = f.amount;
         if (amt == 0 || amt % SHARE_UNIT != 0) revert BadAmount();
         if (t.launchId != m.launchId) revert BadFill();
         uint256 id = t.launchId;
         if (!isTradable(id, ts)) revert NotTradable();
-        _addFilled(th, t.amount, amt);
-        _addFilled(mh, m.amount, amt);
 
         uint8 pm = m.price;
         // exact: amt is a multiple of 1e16
         uint256 makerValue = uint256(amt) * pm / 100;
         uint256 takerValue = uint256(amt) - makerValue;
         uint8 kind = f.kind;
+        if (quoteToken != address(0)) {
+            address short_ = _unfunded(t, m, kind, makerValue, takerValue);
+            if (short_ != address(0)) {
+                emit FillSkipped(batchCount, idx, short_);
+                return;
+            }
+        }
+        _addFilled(th, t.amount, amt);
+        _addFilled(mh, m.amount, amt);
         if (kind == 0) {
             if (t.outcome != m.outcome || t.side == m.side) revert BadCross();
             if (t.side == BUY) {
@@ -884,8 +914,8 @@ contract Exchange is Ownable, ReentrancyGuard {
             }
             _subShares(id, m.owner, m.outcome, amt);
             _subShares(id, t.owner, t.outcome, amt);
-            balanceOf[m.owner] += makerValue;
-            balanceOf[t.owner] += takerValue;
+            _credit(m.owner, makerValue);
+            _credit(t.owner, takerValue);
             _launches[id].pairs -= amt;
         } else {
             revert BadFill();
@@ -895,7 +925,7 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     function _transfer(uint256 id, uint8 outcome, address seller, address buyer, uint128 amt, uint256 cost) internal {
         _debit(buyer, cost);
-        balanceOf[seller] += cost;
+        _credit(seller, cost);
         _subShares(id, seller, outcome, amt);
         _addShares(id, buyer, outcome, amt);
     }
@@ -906,10 +936,42 @@ contract Exchange is Ownable, ReentrancyGuard {
         filled[h] = nf;
     }
 
+    /// @dev The first payer of a fill (ERC20 quote) whose `spendable` can't cover its part, or address(0).
+    function _unfunded(
+        Eip712.Order calldata t,
+        Eip712.Order calldata m,
+        uint8 kind,
+        uint256 makerValue,
+        uint256 takerValue
+    ) internal view returns (address) {
+        if (kind == 0) {
+            address buyer = t.side == BUY ? t.owner : m.owner;
+            return spendable(buyer) < makerValue ? buyer : address(0);
+        }
+        if (kind != 1) return address(0);
+        if (m.owner == t.owner) return spendable(m.owner) < makerValue + takerValue ? m.owner : address(0);
+        if (spendable(m.owner) < makerValue) return m.owner;
+        if (spendable(t.owner) < takerValue) return t.owner;
+        return address(0);
+    }
+
+    /// @dev Internal balance first; with an ERC20 quote the rest is pulled from the wallet (approve-only trading).
     function _debit(address u, uint256 amt) internal {
         uint256 bal = balanceOf[u];
-        if (bal < amt) revert InsufficientBalance();
-        balanceOf[u] = bal - amt;
+        if (bal >= amt) {
+            balanceOf[u] = bal - amt;
+            return;
+        }
+        address q = quoteToken;
+        if (q == address(0)) revert InsufficientBalance();
+        balanceOf[u] = 0;
+        IERC20(q).safeTransferFrom(u, address(this), amt - bal);
+    }
+
+    /// @dev Native quote: credit the internal balance. ERC20 quote: pay the wallet directly (no withdraw needed).
+    function _credit(address u, uint256 amt) internal {
+        if (quoteToken == address(0)) balanceOf[u] += amt;
+        else _payOut(u, amt);
     }
 
     function _addShares(uint256 id, address u, uint8 outcome, uint128 amt) internal {
