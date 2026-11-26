@@ -1,9 +1,10 @@
 //! Pending batches (open → sealed → sent) and their ABI form.
 //!
-//! Rules (Review Focus 1): a batch's `ts` is the time of its first message; a fill joins the open
-//! batch only if `batch.ts < settleTime` of its launch; the open batch is sealed when the batch
-//! timer fires (`batch_ms`, capped at `MAX_OPEN_MS` so `block.timestamp − ts ≤ MAX_LAG` holds),
-//! at any settleTime of a launch it holds fills for, or when it reaches `MAX_BATCH_FILLS`.
+//! Rules (Review Focus 1): a batch's `ts` is the time of its first message (sequencer-side only; the
+//! contract checks everything at `block.timestamp`); a fill joins the open batch only if
+//! `batch.ts < settleTime` of its launch; the open batch is sealed when the batch timer fires
+//! (`batch_ms`, capped at `MAX_OPEN_MS`), at any settleTime of a launch it holds fills for, or when it
+//! reaches `MAX_BATCH_FILLS`. A fill that lands after its settleTime is skipped on chain (`FillSkipped`).
 
 use std::collections::HashMap;
 
@@ -35,6 +36,16 @@ pub struct KeyRec {
     pub sig: Vec<u8>,
 }
 
+/// A signed offchain cancel, carried onchain in the batch (after its fills).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelRec {
+    pub order_hash: B256,
+    pub nonce: u64,
+    pub sig: Vec<u8>,
+    /// Recovered signer: the owner or one of its trading keys.
+    pub signer: Address,
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingBatch {
     /// Batch timestamp (seconds): time of its first message.
@@ -42,6 +53,9 @@ pub struct PendingBatch {
     pub opened_ms: u64,
     pub fills: Vec<FillRec>,
     pub keys: Vec<KeyRec>,
+    pub cancels: Vec<CancelRec>,
+    /// Resting orders published to the onchain book (`OrderPosted`); chosen when the batch is sent.
+    pub posts: Vec<B256>,
     pub withdraw_to: u64,
     /// Earliest settleTime among the launches it holds fills for.
     pub min_settle: u64,
@@ -57,6 +71,8 @@ impl PendingBatch {
             opened_ms: now_ms,
             fills: Vec::new(),
             keys: Vec::new(),
+            cancels: Vec::new(),
+            posts: Vec::new(),
             withdraw_to: 0,
             min_settle: u64::MAX,
             sealed: false,
@@ -65,7 +81,7 @@ impl PendingBatch {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.fills.is_empty() && self.keys.is_empty()
+        self.fills.is_empty() && self.keys.is_empty() && self.cancels.is_empty()
     }
 
     /// Due for sealing at `now_ms`?
@@ -73,6 +89,7 @@ impl PendingBatch {
         now_ms >= self.opened_ms + batch_ms.min(MAX_OPEN_MS)
             || now_ms / 1000 >= self.min_settle
             || self.fills.len() >= crate::types::MAX_BATCH_FILLS
+            || self.cancels.len() >= crate::types::MAX_BATCH_FILLS
     }
 }
 
@@ -109,8 +126,12 @@ pub fn to_abi<'a>(
             amount: f.amount,
         })
         .collect();
+    let posts = b
+        .posts
+        .iter()
+        .map(|h| index_of(h, &mut orders))
+        .collect();
     abi::Batch {
-        ts: b.ts,
         keys: b
             .keys
             .iter()
@@ -123,7 +144,17 @@ pub fn to_abi<'a>(
             })
             .collect(),
         orders,
+        posts,
         fills,
+        cancels: b
+            .cancels
+            .iter()
+            .map(|c| abi::SignedCancel {
+                order: lookup(&c.order_hash).order.into(),
+                nonce: c.nonce,
+                sig: Bytes::copy_from_slice(&c.sig),
+            })
+            .collect(),
         withdrawTo: b.withdraw_to,
     }
 }

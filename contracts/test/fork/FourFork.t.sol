@@ -79,7 +79,6 @@ contract FourForkTest is Test {
         ex = new Exchange(owner, quote);
         vm.startPrank(owner);
         ex.setFeed(BTCB_FEED, true);
-        ex.setOperator(operator, true);
         ex.setResolver(operator);
         ex.setMinTarget(quote == address(0) ? 2 ether : 1500 ether);
         vm.stopPrank();
@@ -116,9 +115,8 @@ contract FourForkTest is Test {
                 author: forkOwner
             })
         );
-        IOpenFourFeeRouter(vm.parseJsonAddress(fork, ".addresses.feeRouter")).setPresetFeeConfig(
-            PRESET_ID, IOpenFourFeeRouter.OverriddenFeeConfig(0, 0, 100, 1000, 5, true, 0)
-        );
+        IOpenFourFeeRouter(vm.parseJsonAddress(fork, ".addresses.feeRouter"))
+            .setPresetFeeConfig(PRESET_ID, IOpenFourFeeRouter.OverriddenFeeConfig(0, 0, 100, 1000, 5, true, 0));
         IOpenFourCoreAdmin(address(core)).setSigner(vm.addr(SIGNER_PK));
         vm.stopPrank();
         vm.prank(owner);
@@ -212,7 +210,6 @@ contract FourForkTest is Test {
         _fund(bob, 10 ether * k);
         uint64 exp = uint64(block.timestamp + 1 days);
         Exchange.Batch memory b;
-        b.ts = uint64(block.timestamp);
         b.orders = new Exchange.SignedOrder[](2);
         b.orders[0] = _signed(Eip712.Order(bob, 0, 0, 1, 0, 50, amt, exp, 1), BOB_PK);
         b.orders[1] = _signed(Eip712.Order(alice, 0, 0, 0, 0, 50, amt, exp, 1), ALICE_PK);

@@ -204,8 +204,7 @@ impl<C: Chain> App<C> {
             Ok(tx) => {
                 *self.last_error.lock().unwrap() = None;
                 tracing::info!(
-                    "batch ts {} settled in {tx} ({} fills, withdrawTo {})",
-                    batch.ts,
+                    "batch settled in {tx} ({} fills, withdrawTo {})",
                     batch.fills.len(),
                     batch.withdrawTo
                 );
@@ -216,7 +215,7 @@ impl<C: Chain> App<C> {
                 Ok(Some(tx))
             }
             Err(e) => {
-                tracing::warn!("batch ts {} failed, reversing its fills: {e:#}", batch.ts);
+                tracing::warn!("batch failed, reversing its fills: {e:#}");
                 *self.last_error.lock().unwrap() = Some(format!("{e:#}"));
                 self.state.lock().unwrap().on_batch_failed(now_ms());
                 self.bump();

@@ -30,6 +30,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     uint256 public constant FORCE_DELAY = 600;
+    /// @dev Wait after settleTime before an outcome can be proposed or resolved.
     uint256 public constant MAX_LAG = 15;
     /// @dev Gas forwarded on a push payout; a receiver that needs more gets `pendingPayout` instead.
     uint256 internal constant PUSH_GAS = 10_000;
@@ -130,6 +131,14 @@ contract Exchange is Ownable, ReentrancyGuard {
         bytes sig;
     }
 
+    /// An offchain `Cancel(owner, orderHash, nonce)` signed by the order's owner or one of its live keys, carried
+    /// with the order itself so the contract knows whose order it is.
+    struct SignedCancel {
+        Eip712.Order order;
+        uint64 nonce;
+        bytes sig;
+    }
+
     /// kind 0 Transfer, 1 Mint, 2 Merge; taker/maker index into `Batch.orders`.
     struct Fill {
         uint16 taker;
@@ -139,10 +148,13 @@ contract Exchange is Ownable, ReentrancyGuard {
     }
 
     struct Batch {
-        uint64 ts;
         KeyAuth[] keys;
         SignedOrder[] orders;
+        /// Indexes into `orders` of the limit orders resting after this batch, published as `OrderPosted` so the
+        /// book is public onchain (anyone can match it, e.g. while the sequencer is down).
+        uint16[] posts;
         Fill[] fills;
+        SignedCancel[] cancels;
         uint64 withdrawTo;
     }
 
@@ -163,7 +175,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------------------------------------------
 
     address public factory;
-    mapping(address => bool) public operators;
     mapping(address => bool) public feedEnabled;
     /// Atlas feed => Chainlink AggregatorV3 read by `snapshot` when the Atlas feed reverts or answers <= 0.
     mapping(address => address) public fallbackFeed;
@@ -175,7 +186,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     WithdrawRequest[] internal _withdraws;
     uint64 public withdrawProcessed;
 
-    uint64 public lastBatchTs;
     uint64 public batchCount;
 
     mapping(address owner => mapping(address key => uint64)) public keyExpiry;
@@ -206,7 +216,6 @@ contract Exchange is Ownable, ReentrancyGuard {
 
     event FactorySet(address factory);
     event ExtraFactorySet(address factory, bool on);
-    event OperatorSet(address op, bool on);
     event FeedSet(address feed, bool enabled);
     event MinTargetSet(uint256 minTarget);
     event Deposited(address user, uint256 amount);
@@ -217,6 +226,20 @@ contract Exchange is Ownable, ReentrancyGuard {
     event KeyAuthorized(address owner, address key, uint64 expiry);
     event KeyRevoked(address owner, address key);
     event OrderCancelled(address owner, bytes32 orderHash);
+    /// @notice A signed limit order published to the onchain book (flat: every field needed to fill it).
+    event OrderPosted(
+        bytes32 orderHash,
+        address owner,
+        uint256 launchId,
+        uint64 round,
+        uint8 outcome,
+        uint8 side,
+        uint8 price,
+        uint128 amount,
+        uint64 expiry,
+        uint64 nonce,
+        bytes sig
+    );
     event MinNonceBumped(address owner, uint64 minNonce);
     event LaunchCreated(
         uint256 launchId,
@@ -243,8 +266,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     event TokensClaimed(uint256 launchId, address user, uint256 amount);
     event Trade(uint256 launchId, bytes32 takerHash, bytes32 makerHash, uint8 kind, uint8 makerPrice, uint128 amount);
     event BatchSubmitted(uint64 batchId, uint64 ts, uint256 fills);
-    /// @notice ERC20 quote: fill `index` of batch `batchId` was not applied because `user` could no longer pay
-    ///         (wallet balance or allowance moved after the sequencer matched it).
+    /// @notice Fill `index` of batch `batchId` was not applied because state moved after it was matched: its market
+    ///         had closed (`user` = 0), or `user`'s order could no longer trade (expired, cancelled, key revoked,
+    ///         filled elsewhere), or `user` could no longer pay (quote or shares).
     event FillSkipped(uint64 batchId, uint256 index, address user);
     event QuestionSet(uint256 launchId, string question, uint256 marketId);
     event OutcomeProposed(uint256 launchId, uint8 outcome, bytes32 evidenceHash, address by, bool final_);
@@ -255,7 +279,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     // Errors
     // ---------------------------------------------------------------------------------------------------------
 
-    error NotOperator();
     error ZeroAmount();
     error BadIndex();
     error NotRequester();
@@ -263,13 +286,9 @@ contract Exchange is Ownable, ReentrancyGuard {
     error TooEarly();
     error NothingToClaim();
     error TransferFailed();
-    error BadBatchTs();
     error BadSignature();
-    error KeyNonceUsed();
     error NotOwner();
     error BadNonce();
-    error OrderDead();
-    error Expired();
     error BadOrder();
     error NotFactory();
     error FeedNotEnabled();
@@ -286,9 +305,7 @@ contract Exchange is Ownable, ReentrancyGuard {
     error AlreadyResolved();
     error BadFill();
     error BadAmount();
-    error NotTradable();
     error BadCross();
-    error Overfill();
     error InsufficientBalance();
     error InsufficientShares();
     error NotResolved();
@@ -304,11 +321,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     error NotResolver();
     error AlreadyProposed();
     error BadOutcome();
-
-    modifier onlyOperator() {
-        if (!operators[msg.sender]) revert NotOperator();
-        _;
-    }
 
     constructor(address owner_, address quoteToken_) Ownable(owner_) {
         if (quoteToken_ != address(0) && IERC20Decimals(quoteToken_).decimals() != 18) revert BadToken();
@@ -331,11 +343,6 @@ contract Exchange is Ownable, ReentrancyGuard {
     function setExtraFactory(address f, bool on) external onlyOwner {
         extraFactory[f] = on;
         emit ExtraFactorySet(f, on);
-    }
-
-    function setOperator(address op, bool on) external onlyOwner {
-        operators[op] = on;
-        emit OperatorSet(op, on);
     }
 
     function setFeed(address feed, bool enabled) external onlyOwner {
@@ -501,36 +508,53 @@ contract Exchange is Ownable, ReentrancyGuard {
     }
 
     /// @dev Valid iff signed by the owner, or by a key of the owner whose expiry is >= ts.
-    function _checkSig(Eip712.Order calldata o, bytes calldata sig, uint64 ts) internal view returns (bytes32 h) {
-        h = orderHash(o);
+    function _validSig(Eip712.Order calldata o, bytes32 h, bytes calldata sig, uint64 ts) internal view returns (bool) {
         (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, sig);
-        if (err != ECDSA.RecoverError.NoError || signer == address(0)) revert BadSignature();
-        if (signer != o.owner) {
-            uint64 exp = keyExpiry[o.owner][signer];
-            if (exp == 0 || exp < ts) revert BadSignature();
-        }
+        if (err != ECDSA.RecoverError.NoError || signer == address(0)) return false;
+        if (signer == o.owner) return true;
+        uint64 exp = keyExpiry[o.owner][signer];
+        return exp != 0 && exp >= ts;
     }
 
-    /// @dev Signature plus every per-order rule that does not depend on the launch.
+    /// @dev The order's hash, or 0 when it can no longer trade: expired, its signature (or signing key) no longer
+    ///      valid, cancelled or below `minNonce`. Those depend on state a user can change at any time, so they skip
+    ///      the order's fills instead of reverting the batch. A malformed order is the submitter's fault: revert.
     function _checkOrder(Eip712.Order calldata o, bytes calldata sig, uint64 ts) internal view returns (bytes32 h) {
         if (
             o.round != 0 || o.outcome > 1 || o.side > 1 || o.price == 0 || o.price > 99 || o.amount == 0
                 || o.amount % SHARE_UNIT != 0
         ) revert BadOrder();
-        if (o.expiry < ts) revert Expired();
-        h = _checkSig(o, sig, ts);
-        if (cancelled[h] || o.nonce < minNonce[o.owner]) revert OrderDead();
+        h = orderHash(o);
+        if (o.expiry < ts || !_validSig(o, h, sig, ts) || cancelled[h] || o.nonce < minNonce[o.owner]) return 0;
     }
 
-    /// @dev An owner-signed AuthorizeKey carried in a batch; each (owner, nonce) is usable once.
+    /// @dev An owner-signed AuthorizeKey carried in a batch; each (owner, nonce) is usable once. Already used (e.g.
+    ///      another submitter landed the same authorization first): skipped, so a replay never reverts the batch.
     function _applyKeyAuth(KeyAuth calldata k) internal {
-        if (usedKeyNonce[k.owner][k.nonce]) revert KeyNonceUsed();
+        if (usedKeyNonce[k.owner][k.nonce]) return;
         bytes32 h = Eip712.hashAuthorizeKey(DOMAIN_SEPARATOR, k.owner, k.key, k.expiry, k.nonce);
         (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, k.sig);
         if (err != ECDSA.RecoverError.NoError || signer != k.owner || signer == address(0)) revert BadSignature();
         usedKeyNonce[k.owner][k.nonce] = true;
         keyExpiry[k.owner][k.key] = k.expiry;
         emit KeyAuthorized(k.owner, k.key, k.expiry);
+    }
+
+    /// @dev A signed cancel carried in a batch. Idempotent: an order already cancelled (e.g. by another submitter
+    ///      landing the same cancel first) is skipped, so a duplicate never reverts the batch.
+    function _applyCancel(SignedCancel calldata c, uint64 ts) internal {
+        bytes32 oh = orderHash(c.order);
+        if (cancelled[oh]) return;
+        address owner_ = c.order.owner;
+        bytes32 h = Eip712.hashCancel(DOMAIN_SEPARATOR, owner_, oh, c.nonce);
+        (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecoverCalldata(h, c.sig);
+        if (err != ECDSA.RecoverError.NoError || signer == address(0)) revert BadSignature();
+        if (signer != owner_) {
+            uint64 exp = keyExpiry[owner_][signer];
+            if (exp == 0 || exp < ts) revert BadSignature();
+        }
+        cancelled[oh] = true;
+        emit OrderCancelled(owner_, oh);
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -662,7 +686,7 @@ contract Exchange is Ownable, ReentrancyGuard {
         emit OutcomeProposed(id, outcome, evidenceHash, msg.sender, fin);
     }
 
-    /// @notice Settle the market, after settleTime + MAX_LAG (every batch stamped before settleTime has landed).
+    /// @notice Settle the market, after settleTime + MAX_LAG (no fill lands at or after settleTime).
     ///         Price launch: once snapped or the snapshot window has closed (Void if not snapped). Question launch:
     ///         once the outcome is final (owner override), or a proposal has waited `challengeWindow`, or (Void) no
     ///         proposal came by settleTime + QUESTION_DEADLINE.
@@ -840,9 +864,15 @@ contract Exchange is Ownable, ReentrancyGuard {
     // Batches
     // ---------------------------------------------------------------------------------------------------------
 
-    function submitBatch(Batch calldata b) external onlyOperator nonReentrant {
-        if (b.ts < lastBatchTs || b.ts > block.timestamp || block.timestamp - b.ts > MAX_LAG) revert BadBatchTs();
-        lastBatchTs = b.ts;
+    /// @notice Permissionless: anyone may submit a batch. Every rule a batch could break is checked here
+    ///         (signatures, prices, amounts, funds), all at `block.timestamp`, so a submitter only picks which
+    ///         valid fills land and in what order. The sequencer matches the orders it is sent. A fill that state
+    ///         moved under (market closed, order filled elsewhere, cancelled, key revoked, payer short) is skipped
+    ///         (`FillSkipped`), not reverted, so another submitter racing the sequencer cannot sink its batch;
+    ///         only a malformed batch (the submitter's own mistake) reverts.
+    ///         Order: key authorizations, orders and fills, posts, cancels, withdrawals.
+    function submitBatch(Batch calldata b) external nonReentrant {
+        uint64 ts = uint64(block.timestamp);
         uint64 id = ++batchCount;
 
         for (uint256 i; i < b.keys.length; ++i) {
@@ -852,12 +882,24 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint256 n = b.orders.length;
         bytes32[] memory hashes = new bytes32[](n);
         for (uint256 i; i < n; ++i) {
-            hashes[i] = _checkOrder(b.orders[i].order, b.orders[i].sig, b.ts);
+            hashes[i] = _checkOrder(b.orders[i].order, b.orders[i].sig, ts);
         }
         for (uint256 i; i < b.fills.length; ++i) {
             Fill calldata f = b.fills[i];
             if (f.taker == f.maker || f.taker >= n || f.maker >= n) revert BadFill();
-            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, b.ts, i);
+            _applyFill(b.orders[f.taker].order, b.orders[f.maker].order, hashes[f.taker], hashes[f.maker], f, ts, i);
+        }
+        // what rests after the fills goes on the public book (skipping orders dead or already full)
+        for (uint256 i; i < b.posts.length; ++i) {
+            uint256 p = b.posts[i];
+            if (p >= n) revert BadFill();
+            bytes32 h = hashes[p];
+            Eip712.Order calldata o = b.orders[p].order;
+            if (h != 0 && filled[h] < o.amount) _emitPosted(h, o, b.orders[p].sig);
+        }
+        // after the fills: a fill matched before the cancel still lands, nothing after it can
+        for (uint256 i; i < b.cancels.length; ++i) {
+            _applyCancel(b.cancels[i], ts);
         }
 
         uint64 to = b.withdrawTo;
@@ -867,7 +909,7 @@ contract Exchange is Ownable, ReentrancyGuard {
             if (!w.done) _processWithdraw(i, w);
         }
         if (to > withdrawProcessed) withdrawProcessed = to;
-        emit BatchSubmitted(id, b.ts, b.fills.length);
+        emit BatchSubmitted(id, ts, b.fills.length);
     }
 
     /// @dev One fill at the maker's price. Transfer: shares one way, quote the other. Mint: both buy opposite
@@ -885,54 +927,99 @@ contract Exchange is Ownable, ReentrancyGuard {
         uint128 amt = f.amount;
         if (amt == 0 || amt % SHARE_UNIT != 0) revert BadAmount();
         if (t.launchId != m.launchId) revert BadFill();
-        uint256 id = t.launchId;
-        if (!isTradable(id, ts)) revert NotTradable();
-
+        uint8 kind = f.kind;
         uint8 pm = m.price;
+        _checkCross(t, m, kind, pm);
+        uint256 id = t.launchId;
         // exact: amt is a multiple of 1e16
         uint256 makerValue = uint256(amt) * pm / 100;
         uint256 takerValue = uint256(amt) - makerValue;
-        uint8 kind = f.kind;
-        if (quoteToken != address(0)) {
-            address short_ = _unfunded(t, m, kind, makerValue, takerValue);
-            if (short_ != address(0)) {
-                emit FillSkipped(batchCount, idx, short_);
-                return;
-            }
+        // Everything below depends on state that others can move before the batch lands (another batch filling
+        // the same order, a cancel, a revoked key, a balance spent elsewhere): skip just this fill.
+        address skip = _skipFor(t, m, th, mh, kind, id, amt, makerValue, takerValue, ts);
+        if (skip != address(0)) {
+            emit FillSkipped(batchCount, idx, skip == SKIP_CLOSED ? address(0) : skip);
+            return;
         }
-        _addFilled(th, t.amount, amt);
-        _addFilled(mh, m.amount, amt);
+        filled[th] += amt;
+        filled[mh] += amt;
         if (kind == 0) {
-            if (t.outcome != m.outcome || t.side == m.side) revert BadCross();
-            if (t.side == BUY) {
-                if (pm > t.price) revert BadCross();
-                _transfer(id, t.outcome, m.owner, t.owner, amt, makerValue);
-            } else {
-                if (pm < t.price) revert BadCross();
-                _transfer(id, t.outcome, t.owner, m.owner, amt, makerValue);
-            }
+            if (t.side == BUY) _transfer(id, t.outcome, m.owner, t.owner, amt, makerValue);
+            else _transfer(id, t.outcome, t.owner, m.owner, amt, makerValue);
         } else if (kind == 1) {
-            if (t.side != BUY || m.side != BUY || t.outcome == m.outcome || uint256(t.price) + pm < 100) {
-                revert BadCross();
-            }
             _debit(m.owner, makerValue);
             _debit(t.owner, takerValue);
             _addShares(id, m.owner, m.outcome, amt);
             _addShares(id, t.owner, t.outcome, amt);
             _launches[id].pairs += amt;
-        } else if (kind == 2) {
-            if (t.side != SELL || m.side != SELL || t.outcome == m.outcome || uint256(t.price) + pm > 100) {
-                revert BadCross();
-            }
+        } else {
             _subShares(id, m.owner, m.outcome, amt);
             _subShares(id, t.owner, t.outcome, amt);
             _credit(m.owner, makerValue);
             _credit(t.owner, takerValue);
             _launches[id].pairs -= amt;
+        }
+        emit Trade(id, th, mh, kind, pm, amt);
+    }
+
+    function _emitPosted(bytes32 h, Eip712.Order calldata o, bytes calldata sig) internal {
+        emit OrderPosted(h, o.owner, o.launchId, o.round, o.outcome, o.side, o.price, o.amount, o.expiry, o.nonce, sig);
+    }
+
+    /// @dev Sentinel for "market closed" in `_skipFor` (reported as user 0).
+    address internal constant SKIP_CLOSED = address(1);
+
+    /// @dev Static rules of a cross (the submitter's own mistake): revert.
+    function _checkCross(Eip712.Order calldata t, Eip712.Order calldata m, uint8 kind, uint8 pm) internal pure {
+        if (kind == 0) {
+            if (t.outcome != m.outcome || t.side == m.side) revert BadCross();
+            if (t.side == BUY ? pm > t.price : pm < t.price) revert BadCross();
+        } else if (kind == 1) {
+            if (t.side != BUY || m.side != BUY || t.outcome == m.outcome || uint256(t.price) + pm < 100) {
+                revert BadCross();
+            }
+        } else if (kind == 2) {
+            if (t.side != SELL || m.side != SELL || t.outcome == m.outcome || uint256(t.price) + pm > 100) {
+                revert BadCross();
+            }
         } else {
             revert BadFill();
         }
-        emit Trade(id, th, mh, kind, pm, amt);
+    }
+
+    /// @dev Who a fill is skipped for, or address(0) to apply it: the market closed (SKIP_CLOSED), an order that can
+    ///      no longer trade or would overfill (its owner), or a payer short of quote or shares.
+    function _skipFor(
+        Eip712.Order calldata t,
+        Eip712.Order calldata m,
+        bytes32 th,
+        bytes32 mh,
+        uint8 kind,
+        uint256 id,
+        uint128 amt,
+        uint256 makerValue,
+        uint256 takerValue,
+        uint64 ts
+    ) internal view returns (address) {
+        if (!isTradable(id, ts)) return SKIP_CLOSED;
+        if (th == 0 || filled[th] + amt > t.amount) return t.owner;
+        if (mh == 0 || filled[mh] + amt > m.amount) return m.owner;
+        if (th == mh) return t.owner; // the same order on both sides of one fill
+        address short_ = _unfunded(t, m, kind, makerValue, takerValue);
+        if (short_ != address(0)) return short_;
+        if (kind == 0) {
+            address seller = t.side == SELL ? t.owner : m.owner;
+            if (_shares(id, seller, t.outcome) < amt) return seller;
+        } else if (kind == 2) {
+            if (_shares(id, m.owner, m.outcome) < amt) return m.owner;
+            if (_shares(id, t.owner, t.outcome) < amt) return t.owner;
+        }
+        return address(0);
+    }
+
+    function _shares(uint256 id, address u, uint8 outcome) internal view returns (uint128) {
+        Position storage p = _positions[id][u];
+        return outcome == UP ? p.up : p.down;
     }
 
     function _transfer(uint256 id, uint8 outcome, address seller, address buyer, uint128 amt, uint256 cost) internal {
@@ -940,12 +1027,6 @@ contract Exchange is Ownable, ReentrancyGuard {
         _credit(seller, cost);
         _subShares(id, seller, outcome, amt);
         _addShares(id, buyer, outcome, amt);
-    }
-
-    function _addFilled(bytes32 h, uint128 orderAmount, uint128 amt) internal {
-        uint128 nf = filled[h] + amt;
-        if (nf > orderAmount) revert Overfill();
-        filled[h] = nf;
     }
 
     /// @dev The first payer of a fill (ERC20 quote) whose `spendable` can't cover its part, or address(0).

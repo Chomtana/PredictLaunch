@@ -45,7 +45,6 @@ contract QuoteTokenTest is Base {
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(address(feed), true);
-        ex.setOperator(operator, true);
         vm.stopPrank();
         _fundUsd(alice, 50 ether);
         _fundUsd(bob, 50 ether);
@@ -96,7 +95,7 @@ contract QuoteTokenTest is Base {
         vm.prank(alice);
         uint64 idx = ex.requestWithdraw(20 ether);
         vm.prank(operator);
-        ex.submitBatch(_emptyBatch(uint64(block.timestamp), idx + 1));
+        ex.submitBatch(_emptyBatch(idx + 1));
         assertEq(usd.balanceOf(alice), 20 ether);
         assertEq(ex.balanceOf(alice), 30 ether);
     }
@@ -106,7 +105,7 @@ contract QuoteTokenTest is Base {
         vm.prank(alice);
         uint64 idx = ex.requestWithdraw(5 ether);
         vm.prank(operator);
-        ex.submitBatch(_emptyBatch(uint64(block.timestamp), idx + 1));
+        ex.submitBatch(_emptyBatch(idx + 1));
         assertEq(ex.pendingPayout(alice), 5 ether);
         assertEq(usd.balanceOf(address(ex)), 100 ether);
         vm.prank(alice);
@@ -226,7 +225,7 @@ contract QuoteTokenTest is Base {
         Exchange.Fill[] memory fs = new Exchange.Fill[](2);
         fs[0] = Exchange.Fill(0, 1, 1, 2e18);
         fs[1] = Exchange.Fill(2, 3, 1, 2e18);
-        Exchange.Batch memory b = _batch(uint64(block.timestamp), os, fs);
+        Exchange.Batch memory b = _batch(os, fs);
         vm.expectEmit(address(ex));
         emit Exchange.FillSkipped(1, 0, carol);
         _submit(b);
@@ -240,11 +239,8 @@ contract QuoteTokenTest is Base {
     function test_sameOwnerMintNeedsBothLegs() public {
         _usdLaunch();
         _approveOnly(carol, 3 ether); // needs 4 for both legs of 4 pairs at 50/50
-        Exchange.Batch memory b = _batch(
-            uint64(block.timestamp),
-            _orders2(_s(_o(carol, 1, 0, 50, 4e18)), _s(_o(carol, 0, 0, 50, 4e18))),
-            _fills1(0, 1, 1, 4e18)
-        );
+        Exchange.Batch memory b =
+            _batch(_orders2(_s(_o(carol, 1, 0, 50, 4e18)), _s(_o(carol, 0, 0, 50, 4e18))), _fills1(0, 1, 1, 4e18));
         vm.expectEmit(address(ex));
         emit Exchange.FillSkipped(1, 0, carol);
         _submit(b);

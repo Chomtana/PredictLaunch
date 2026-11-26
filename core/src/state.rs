@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use alloy_primitives::{Address, B256, U256};
 
 use crate::abi;
-use crate::batcher::{self, FillRec, KeyRec, OrderData, PendingBatch};
+use crate::batcher::{self, CancelRec, FillRec, KeyRec, OrderData, PendingBatch};
 use crate::book::{self, Book, BookError, RestingOrder};
 use crate::eip712::{authorize_key_hash, cancel_hash, order_hash, recover, Domain, KeyAuthMsg};
 use crate::types::*;
@@ -130,6 +130,10 @@ pub enum ChainEvent {
     },
     OrderCancelled {
         owner: Address,
+        order_hash: B256,
+    },
+    /// A resting order published to the onchain book.
+    OrderPosted {
         order_hash: B256,
     },
     MinNonceBumped {
@@ -494,6 +498,8 @@ pub struct State {
     pub chain_keys: HashMap<(Address, Address), u64>,
     pub pending_keys: HashMap<(Address, Address), u64>,
     pub cancelled: HashSet<B256>,
+    /// Orders already on the onchain book (`OrderPosted`, or in a batch of ours that landed).
+    pub posted: HashSet<B256>,
     pub min_nonce: HashMap<Address, u64>,
     pub withdrawals: BTreeMap<u64, Withdrawal>,
     pub withdraw_processed: u64,
@@ -528,6 +534,7 @@ impl State {
             chain_keys: HashMap::new(),
             pending_keys: HashMap::new(),
             cancelled: HashSet::new(),
+            posted: HashSet::new(),
             min_nonce: HashMap::new(),
             withdrawals: BTreeMap::new(),
             withdraw_processed: 0,
@@ -845,6 +852,9 @@ impl State {
                     self.cancel_resting(&h);
                 }
             }
+            E::OrderPosted { order_hash } => {
+                self.posted.insert(order_hash);
+            }
             E::OrderCancelled { order_hash, .. } => {
                 self.cancelled.insert(order_hash);
                 self.cancel_resting(&order_hash);
@@ -1020,10 +1030,8 @@ impl State {
                 let ours = self.batches.front().and_then(|b| b.sent.clone());
                 match (batch, ours) {
                     (Some(eb), Some(sb)) if eb == sb => self.settle_front(&skips),
-                    (None, Some(sb)) if sb.ts == ts && sb.fills.len() as u64 == fills => {
-                        self.settle_front(&skips)
-                    }
-                    (Some(eb), _) => self.apply_foreign_batch(&eb, &skips),
+                    (None, Some(sb)) if sb.fills.len() as u64 == fills => self.settle_front(&skips),
+                    (Some(eb), _) => self.apply_foreign_batch(&eb, ts, &skips),
                     (None, _) => {}
                 }
             }
@@ -1041,6 +1049,8 @@ impl State {
         let Some(b) = self.batches.pop_front() else {
             return;
         };
+        // Posted or not (dead / full by then), never repost them: no batch keeps re-sending an order.
+        self.posted.extend(b.posts.iter().copied());
         for k in &b.keys {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
             self.pending_keys.remove(&(k.owner, k.key));
@@ -1067,8 +1077,9 @@ impl State {
         }
     }
 
-    /// A batch we did not send ourselves (e.g. replayed after a restart).
-    fn apply_foreign_batch(&mut self, b: &abi::Batch, skips: &HashSet<u64>) {
+    /// A batch we did not send ourselves: replayed after a restart, or submitted by anyone else
+    /// (`submitBatch` is permissionless). `ts` is its block time.
+    fn apply_foreign_batch(&mut self, b: &abi::Batch, ts: u64, skips: &HashSet<u64>) {
         for k in &b.keys {
             self.chain_keys.insert((k.owner, k.key), k.expiry);
         }
@@ -1113,7 +1124,7 @@ impl State {
                 .confirmed
                 .apply_fill(t, *th, m, *mh, kind, f.amount, false);
             self.next_fill_id += 1;
-            self.push_trade(self.next_fill_id, t, m, kind, f.amount, b.ts);
+            self.push_trade(self.next_fill_id, t, m, kind, f.amount, ts);
         }
     }
 
@@ -1252,6 +1263,11 @@ impl State {
             self.batches.push_back(PendingBatch::new(now_ms));
             self.seal_back();
         }
+        if self.batches.is_empty() && !self.inflight() && !self.unposted(now_ms / 1000).is_empty() {
+            // Posts-only batch: a resting order with no fill still reaches the onchain book.
+            self.batches.push_back(PendingBatch::new(now_ms));
+            self.seal_back();
+        }
         if self
             .batches
             .back()
@@ -1262,10 +1278,13 @@ impl State {
         if self.inflight() {
             return None;
         }
-        let b = self.batches.front()?;
-        if !b.sealed {
+        if !self.batches.front()?.sealed {
             return None;
         }
+        let posts = self.unposted(now_ms / 1000);
+        let b = self.batches.front_mut().expect("front");
+        b.posts = posts;
+        let b = self.batches.front().expect("front");
         let orders = &self.orders;
         let abi_batch = batcher::to_abi(b, |h| {
             let e = &orders[h];
@@ -1276,6 +1295,28 @@ impl State {
         });
         self.batches.front_mut().expect("front").sent = Some(abi_batch.clone());
         Some(abi_batch)
+    }
+
+    /// Resting orders not yet on the onchain book and still valid to post, oldest first, at most one
+    /// batch's worth.
+    fn unposted(&self, now: u64) -> Vec<B256> {
+        let mut v: Vec<(u64, B256)> = self
+            .books
+            .values()
+            .flat_map(|b| b.orders())
+            .filter(|r| !self.posted.contains(&r.hash))
+            .filter_map(|r| {
+                let e = self.orders.get(&r.hash)?;
+                let o = &e.order;
+                let live = o.expiry >= now
+                    && (e.signer == o.owner
+                        || self.key_expiry(o.owner, e.signer).is_some_and(|x| x >= now));
+                live.then_some((e.seq, r.hash))
+            })
+            .collect();
+        v.sort_unstable();
+        v.truncate(MAX_BATCH_FILLS);
+        v.into_iter().map(|(_, h)| h).collect()
     }
 
     /// The in-flight batch was refused (simulation or transaction failed): reverse its fills.
@@ -1292,6 +1333,22 @@ impl State {
         let ids: HashSet<u64> = b.fills.iter().map(|f| f.id).collect();
         self.trades.retain(|t| !ids.contains(&t.fill_id));
         self.soft_reversals += 1;
+        // The cancels still stand: queue them again (unless already onchain or no longer signable).
+        let now = now_ms / 1000;
+        let retry: Vec<CancelRec> = b
+            .cancels
+            .into_iter()
+            .filter(|c| !self.cancelled.contains(&c.order_hash))
+            .filter(|c| {
+                self.orders.get(&c.order_hash).is_some_and(|e| {
+                    c.signer == e.order.owner
+                        || self.key_expiry(e.order.owner, c.signer).is_some_and(|x| x >= now)
+                })
+            })
+            .collect();
+        for c in retry {
+            self.push_cancel(c, now_ms);
+        }
         self.rebuild();
         self.drop_settled(now_ms);
     }
@@ -1412,6 +1469,16 @@ impl State {
                     return Err(rej(ErrorCode::UnknownOrder, "order does not rest"));
                 }
                 self.cancel_resting(&oh);
+                // Binding onchain too: the next batch carries it, so nobody can fill the rest later.
+                self.push_cancel(
+                    CancelRec {
+                        order_hash: oh,
+                        nonce,
+                        sig,
+                        signer,
+                    },
+                    now_ms,
+                );
                 Ok(MsgResult {
                     order_hash: Some(oh),
                     ..Default::default()
@@ -1562,6 +1629,17 @@ impl State {
         for h in dead {
             self.remove_resting(&h);
         }
+    }
+
+    fn push_cancel(&mut self, rec: CancelRec, now_ms: u64) {
+        if self
+            .batches
+            .back()
+            .is_some_and(|b| !b.sealed && b.cancels.len() >= MAX_BATCH_FILLS)
+        {
+            self.seal_back();
+        }
+        self.open_batch(now_ms).cancels.push(rec);
     }
 
     fn push_fill(&mut self, rec: FillRec, settle: u64, now_ms: u64) {

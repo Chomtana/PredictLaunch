@@ -29,14 +29,14 @@ struct Args {
     /// Flap Portal address.
     #[arg(long, env = "PREDICTLAUNCH_PORTAL", default_value_t = PORTAL)]
     portal: Address,
-    /// Operator private key (must be enabled with Exchange.setOperator; pays keeper gas too).
+    /// Operator private key (submits batches and pays keeper gas; submitBatch is permissionless).
     #[arg(long, env = "PREDICTLAUNCH_OPERATOR_KEY")]
     operator_key: String,
     #[arg(long, env = "PREDICTLAUNCH_PORT", default_value_t = 8787)]
     port: u16,
     #[arg(long, env = "PREDICTLAUNCH_HOST", default_value = "127.0.0.1")]
     host: String,
-    /// Batch interval in milliseconds (capped at 8000 so batches stay within MAX_LAG).
+    /// Batch interval in milliseconds (capped at 8000).
     #[arg(long, env = "PREDICTLAUNCH_BATCH_MS", default_value_t = 2000)]
     batch_ms: u64,
     /// Chain poll + keeper interval in milliseconds.

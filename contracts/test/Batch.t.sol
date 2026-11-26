@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Vm} from "forge-std/Vm.sol";
 import {Base} from "test/helpers/Base.t.sol";
 import {Exchange} from "src/Exchange.sol";
 import {Eip712} from "src/lib/Eip712.sol";
@@ -43,7 +44,6 @@ contract BatchTest is Base {
         assertEq(ex.filled(mh), 1e18);
         assertEq(ex.filled(th), 1e18);
         assertEq(ex.projectedRaised(lid), 0.1 ether);
-        assertEq(ex.lastBatchTs(), vm.getBlockTimestamp());
     }
 
     function test_transferFill() public {
@@ -98,55 +98,33 @@ contract BatchTest is Base {
         _fill(_o(bob, 1, 1, 30, 1e18), _o(alice, 0, 1, 70, 1e18), 2, 1e18);
     }
 
-    function test_insufficientFundsRevert() public {
+    function test_insufficientFundsSkipped() public {
         // Carol has no Down shares to sell
-        _expectFillRevert(
-            _o(alice, 1, 0, 50, 1e18), _o(carol, 1, 1, 50, 1e18), 0, 1e18, Exchange.InsufficientShares.selector
-        );
-        // Bob cannot pay for 100 shares
-        _expectFillRevert(
-            _o(bob, 1, 0, 50, 100e18), _o(alice, 0, 0, 50, 100e18), 1, 100e18, Exchange.InsufficientBalance.selector
-        );
+        _expectFillSkipped(_o(alice, 1, 0, 50, 1e18), _o(carol, 1, 1, 50, 1e18), 0, 1e18, carol);
+        // Bob cannot pay 95 for 100 shares (Alice's 5 she can)
+        _expectFillSkipped(_o(bob, 1, 0, 95, 100e18), _o(alice, 0, 0, 5, 100e18), 1, 100e18, bob);
     }
 
-    function test_fillAtOrAfterSettleReverts() public {
-        vm.warp(st + 5);
+    /// Checked at block.timestamp: a fill landing at or after settleTime is skipped, the rest of the batch lands.
+    function test_fillAtOrAfterSettleSkipped() public {
         Exchange.Batch memory b =
-            _batch(st, _orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
-        vm.prank(operator);
-        vm.expectRevert(Exchange.NotTradable.selector);
-        ex.submitBatch(b);
-        b.ts = st - 1;
+            _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        vm.warp(st - 1);
         _submit(b);
         assertEq(ex.getLaunch(lid).pairs, 1e18);
-    }
-
-    function test_batchTsBounds() public {
-        uint64 t = uint64(vm.getBlockTimestamp());
-        Exchange.Batch memory b = _emptyBatch(t + 1, 0);
-        vm.startPrank(operator);
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        vm.warp(t + 16);
-        b.ts = t;
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        b.ts = t + 1;
-        ex.submitBatch(b);
-        b.ts = t;
-        vm.expectRevert(Exchange.BadBatchTs.selector);
-        ex.submitBatch(b);
-        b.ts = t + 1; // equal to lastBatchTs is fine
-        ex.submitBatch(b);
-        vm.stopPrank();
+        b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        vm.warp(st);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(2, 0, address(0));
+        _submit(b);
         assertEq(ex.batchCount(), 2);
+        assertEq(ex.getLaunch(lid).pairs, 1e18);
+        assertEq(ex.filled(ex.orderHash(b.orders[0].order)), 0);
     }
 
     function test_rejectsBadOrders() public {
         // order amount not a multiple of 1e16
-        _expectFillRevert(
-            _o(bob, 1, 0, 50, 1e16 + 1), _o(alice, 0, 0, 50, 1e18), 1, 1e16, Exchange.BadOrder.selector
-        );
+        _expectFillRevert(_o(bob, 1, 0, 50, 1e16 + 1), _o(alice, 0, 0, 50, 1e18), 1, 1e16, Exchange.BadOrder.selector);
         // fill amount not a multiple of 1e16, or zero
         _expectFillRevert(_o(bob, 1, 0, 50, 1e18), _o(alice, 0, 0, 50, 1e18), 1, 1e16 + 1, Exchange.BadAmount.selector);
         _expectFillRevert(_o(bob, 1, 0, 50, 1e18), _o(alice, 0, 0, 50, 1e18), 1, 0, Exchange.BadAmount.selector);
@@ -168,14 +146,15 @@ contract BatchTest is Base {
         ex.authorizeKey(vm.addr(keyPk), uint64(vm.getBlockTimestamp() + 10));
         Eip712.Order memory kb = _o(bob, 1, 0, 50, 1e18);
         Exchange.Batch memory b =
-            _batch(uint64(vm.getBlockTimestamp()), _orders2(_sign(kb, keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
-        vm.warp(vm.getBlockTimestamp() + 11);
-        b.ts = uint64(vm.getBlockTimestamp());
-        vm.prank(operator);
-        vm.expectRevert(Exchange.BadSignature.selector);
-        ex.submitBatch(b);
+            _batch(_orders2(_sign(kb, keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18));
+        uint256 t0 = vm.getBlockTimestamp();
+        vm.warp(t0 + 11);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(ex.batchCount() + 1, 0, bob);
+        _submit(b);
+        assertEq(ex.filled(ex.orderHash(kb)), 0);
         // ...which works while the key is live
-        b.ts = b.ts - 1; // key expiry == ts is still valid
+        vm.warp(t0 + 10); // key expiry == block.timestamp is still valid
         _submit(b);
 
         // overfill: two fills summing above order.amount
@@ -186,24 +165,32 @@ contract BatchTest is Base {
         Exchange.Fill[] memory fs = new Exchange.Fill[](2);
         fs[0] = Exchange.Fill(1, 0, 1, 0.6e18);
         fs[1] = Exchange.Fill(2, 0, 1, 0.5e18);
-        b = _batch(uint64(vm.getBlockTimestamp()), os, fs);
-        vm.prank(operator);
-        vm.expectRevert(Exchange.Overfill.selector);
-        ex.submitBatch(b);
-        fs[1].amount = 0.4e18;
+        b = _batch(os, fs);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(ex.batchCount() + 1, 1, alice);
         _submit(b);
-        // replaying the same fills later overfills
-        vm.prank(operator);
-        vm.expectRevert(Exchange.Overfill.selector);
-        ex.submitBatch(b);
+        assertEq(ex.filled(ex.orderHash(os[0].order)), 0.6e18, "only the first fill landed");
+        // replay: Bob's order would overfill (skipped), Carol's 0.4 fits Alice's last 0.4
+        fs[1].amount = 0.4e18;
+        b = _batch(os, fs);
+        _submit(b);
+        assertEq(ex.filled(ex.orderHash(os[0].order)), 1e18);
+        // again: now both would overfill, both skipped
+        uint64 next = ex.batchCount() + 1;
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(next, 0, bob);
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(next, 1, alice);
+        _submit(b);
+        assertEq(ex.filled(ex.orderHash(os[0].order)), 1e18);
 
         // a cancelled order
         Eip712.Order memory c = _o(alice, 0, 0, 50, 1e18);
         vm.prank(alice);
         ex.cancelOrder(c);
-        _expectFillRevert(_o(bob, 1, 0, 50, 1e18), c, 1, 1e18, Exchange.OrderDead.selector);
+        _expectFillSkipped(_o(bob, 1, 0, 50, 1e18), c, 1, 1e18, alice);
         // a self-referencing fill
-        b = _batch(uint64(vm.getBlockTimestamp()), _orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 0, 1, 1e18));
+        b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 0, 1, 1e18));
         vm.prank(operator);
         vm.expectRevert(Exchange.BadFill.selector);
         ex.submitBatch(b);
@@ -214,7 +201,7 @@ contract BatchTest is Base {
         _depositFrom(address(0xD00D), 3 ether);
         vm.prank(address(0xD00D));
         uint64 idx = ex.requestWithdraw(5 ether);
-        Exchange.Batch memory b = _emptyBatch(uint64(vm.getBlockTimestamp()), idx + 1);
+        Exchange.Batch memory b = _emptyBatch(idx + 1);
         vm.expectEmit(address(ex));
         emit Exchange.WithdrawPaid(idx, address(0xD00D), 5 ether, 3 ether);
         _submit(b);
@@ -222,7 +209,7 @@ contract BatchTest is Base {
         assertEq(ex.balanceOf(address(0xD00D)), 0);
         assertEq(ex.withdrawProcessed(), idx + 1);
         // beyond the queue reverts
-        b = _emptyBatch(uint64(vm.getBlockTimestamp()), idx + 2);
+        b = _emptyBatch(idx + 2);
         vm.prank(operator);
         vm.expectRevert(Exchange.BadIndex.selector);
         ex.submitBatch(b);
@@ -233,16 +220,55 @@ contract BatchTest is Base {
         ex.deposit{value: amt}(amt);
     }
 
-    function test_onlyOperator() public {
-        Exchange.Batch memory b = _emptyBatch(uint64(vm.getBlockTimestamp()), 0);
+    function test_anyoneCanSubmit() public {
         vm.prank(alice);
-        vm.expectRevert(Exchange.NotOperator.selector);
+        ex.submitBatch(_emptyBatch(0));
+        assertEq(ex.batchCount(), 1);
+        vm.prank(bob);
+        ex.submitBatch(_emptyBatch(0));
+        assertEq(ex.batchCount(), 2);
+    }
+
+    /// A signed cancel in a batch lands after its fills: the earlier partial fill settles, the rest is dead.
+    function test_cancelInBatch() public {
+        Eip712.Order memory a = _o(alice, 0, 0, 50, 2e18);
+        bytes32 ah = ex.orderHash(a);
+        Exchange.Batch memory b = _batch(_orders2(_s(_o(bob, 1, 0, 50, 1e18)), _s(a)), _fills1(0, 1, 1, 1e18));
+        b.cancels = new Exchange.SignedCancel[](1);
+        b.cancels[0] = _cancel(a, 1, _pk(alice));
+        vm.expectEmit(address(ex));
+        emit Exchange.OrderCancelled(alice, ah);
+        _submit(b);
+        assertTrue(ex.cancelled(ah));
+        assertEq(ex.filled(ah), 1e18);
+        // the remaining 1e18 can no longer be filled, by anyone
+        _expectFillSkipped(_o(carol, 1, 0, 50, 1e18), a, 1, 1e18, alice);
+        // landing the same cancel again is a no-op, not a revert
+        Exchange.Batch memory again = _emptyBatch(ex.withdrawProcessed());
+        again.cancels = b.cancels;
+        vm.prank(carol);
+        ex.submitBatch(again);
+    }
+
+    function test_cancelSignerRules() public {
+        Eip712.Order memory a = _o(alice, 0, 0, 50, 1e18);
+        Exchange.Batch memory b = _emptyBatch(0);
+        b.cancels = new Exchange.SignedCancel[](1);
+        // someone else cannot cancel Alice's order
+        b.cancels[0] = _cancel(a, 1, _pk(bob));
+        vm.expectRevert(Exchange.BadSignature.selector);
         ex.submitBatch(b);
-        vm.prank(owner);
-        ex.setOperator(operator, false);
-        vm.prank(operator);
-        vm.expectRevert(Exchange.NotOperator.selector);
+        // a live trading key of Alice's can; an expired one cannot
+        uint256 keyPk = 0xCA11;
+        vm.prank(alice);
+        ex.authorizeKey(vm.addr(keyPk), uint64(vm.getBlockTimestamp() + 10));
+        b.cancels[0] = _cancel(a, 1, keyPk);
+        vm.warp(vm.getBlockTimestamp() + 11);
+        vm.expectRevert(Exchange.BadSignature.selector);
         ex.submitBatch(b);
+        vm.warp(vm.getBlockTimestamp() - 1);
+        ex.submitBatch(b);
+        assertTrue(ex.cancelled(ex.orderHash(a)));
     }
 
     function test_keyAuthInBatch() public {
@@ -252,20 +278,111 @@ contract BatchTest is Base {
             abi.encodePacked(
                 "\x19\x01",
                 ex.DOMAIN_SEPARATOR(),
-                keccak256(abi.encode(Eip712.AUTHORIZE_KEY_TYPEHASH, bob, key, uint64(vm.getBlockTimestamp() + 100), uint64(1)))
+                keccak256(
+                    abi.encode(Eip712.AUTHORIZE_KEY_TYPEHASH, bob, key, uint64(vm.getBlockTimestamp() + 100), uint64(1))
+                )
             )
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(BOB_PK, h);
         Exchange.Batch memory b = _batch(
-            uint64(vm.getBlockTimestamp()),
-            _orders2(_sign(_o(bob, 1, 0, 50, 1e18), keyPk), _s(_o(alice, 0, 0, 50, 1e18))),
-            _fills1(0, 1, 1, 1e18)
+            _orders2(_sign(_o(bob, 1, 0, 50, 1e18), keyPk), _s(_o(alice, 0, 0, 50, 1e18))), _fills1(0, 1, 1, 1e18)
         );
         b.keys = new Exchange.KeyAuth[](1);
         b.keys[0] = Exchange.KeyAuth(bob, key, uint64(vm.getBlockTimestamp() + 100), 1, abi.encodePacked(r, s, v));
         _submit(b);
         assertEq(ex.keyExpiry(bob, key), vm.getBlockTimestamp() + 100);
         assertEq(ex.getLaunch(lid).pairs, 1e18);
+    }
+
+    /// The attack a permissionless submitBatch invites: copy the sequencer's batch from the mempool, land a 0.01 fill
+    /// of its maker order and its key authorization first. The sequencer's batch still lands; only the fill that no
+    /// longer fits is skipped, the other fill and the (already used) key authorization are fine.
+    function test_frontrunCannotSinkBatch() public {
+        uint256 keyPk = 0x4E7;
+        address key = vm.addr(keyPk);
+        uint64 exp = uint64(vm.getBlockTimestamp() + 100);
+        bytes32 h = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                ex.DOMAIN_SEPARATOR(),
+                keccak256(abi.encode(Eip712.AUTHORIZE_KEY_TYPEHASH, bob, key, exp, uint64(1)))
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(BOB_PK, h);
+        Exchange.KeyAuth[] memory keys = new Exchange.KeyAuth[](1);
+        keys[0] = Exchange.KeyAuth(bob, key, exp, 1, abi.encodePacked(r, s, v));
+
+        // the sequencer's batch: Bob (via key) x Alice's maker order, and Carol x a second Alice order
+        Eip712.Order memory aliceMaker = _o(alice, 0, 0, 50, 1e18);
+        Exchange.SignedOrder[] memory os = new Exchange.SignedOrder[](4);
+        os[0] = _sign(_o(bob, 1, 0, 50, 1e18), keyPk);
+        os[1] = _s(aliceMaker);
+        os[2] = _s(_o(carol, 1, 0, 60, 1e18));
+        os[3] = _s(_o(alice, 0, 0, 40, 1e18));
+        Exchange.Fill[] memory fs = new Exchange.Fill[](2);
+        fs[0] = Exchange.Fill(0, 1, 1, 1e18);
+        fs[1] = Exchange.Fill(2, 3, 1, 1e18);
+        Exchange.Batch memory seq = _batch(os, fs);
+        seq.keys = keys;
+
+        // the attacker (Carol) lands Bob's key auth and 0.01 of Alice's maker order against her own order
+        Exchange.Batch memory atk =
+            _batch(_orders2(_s(_o(carol, 1, 0, 50, 1e16)), _s(aliceMaker)), _fills1(0, 1, 1, 1e16));
+        atk.keys = keys;
+        vm.prank(carol);
+        ex.submitBatch(atk);
+        assertEq(ex.filled(ex.orderHash(aliceMaker)), 1e16);
+
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(ex.batchCount() + 1, 0, alice);
+        _submit(seq);
+        assertEq(ex.keyExpiry(bob, key), exp, "key auth landed once, replay was a no-op");
+        assertEq(ex.getLaunch(lid).pairs, 1e16 + 1e18, "the attacker's 0.01 plus the untouched second fill");
+    }
+
+    /// Resting orders are published to the onchain book: the partly filled maker and a fresh one with no fill. A fully
+    /// filled order and a cancelled one are not.
+    function test_postsPublishTheBook() public {
+        Eip712.Order memory maker = _o(alice, 0, 0, 50, 2e18); // 1 of 2 filled below: rests
+        Eip712.Order memory taker = _o(bob, 1, 0, 50, 1e18); // fully filled: not posted
+        Eip712.Order memory fresh = _o(carol, 1, 0, 30, 1e18); // no fill: rests
+        Eip712.Order memory dead = _o(carol, 0, 0, 20, 1e18);
+        vm.prank(carol);
+        ex.cancelOrder(dead);
+        Exchange.SignedOrder[] memory os = new Exchange.SignedOrder[](4);
+        os[0] = _s(taker);
+        os[1] = _s(maker);
+        os[2] = _s(fresh);
+        os[3] = _s(dead);
+        Exchange.Batch memory b = _batch(os, _fills1(0, 1, 1, 1e18));
+        b.posts = new uint16[](4);
+        (b.posts[0], b.posts[1], b.posts[2], b.posts[3]) = (0, 1, 2, 3);
+        vm.recordLogs();
+        _submit(b);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic =
+            keccak256("OrderPosted(bytes32,address,uint256,uint64,uint8,uint8,uint8,uint128,uint64,uint64,bytes)");
+        bytes32[] memory posted = new bytes32[](4);
+        uint256 k;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] != topic) continue;
+            (bytes32 h, address owner_,,,,,, uint128 amount,,, bytes memory sig) = abi.decode(
+                logs[i].data, (bytes32, address, uint256, uint64, uint8, uint8, uint8, uint128, uint64, uint64, bytes)
+            );
+            posted[k++] = h;
+            // everything a third party needs to fill it: the event rebuilds the exact signed order
+            assertTrue(owner_ == alice || owner_ == carol);
+            assertGt(amount, 0);
+            assertEq(sig.length, 65);
+        }
+        assertEq(k, 2);
+        assertEq(posted[0], ex.orderHash(maker));
+        assertEq(posted[1], ex.orderHash(fresh));
+        // an out-of-range index is a malformed batch
+        b = _emptyBatch(ex.withdrawProcessed());
+        b.posts = new uint16[](1);
+        vm.expectRevert(Exchange.BadFill.selector);
+        ex.submitBatch(b);
     }
 
     function test_solvencyInvariant() public {
@@ -278,7 +395,7 @@ contract BatchTest is Base {
         ex.requestWithdraw(4 ether);
         vm.prank(bob);
         ex.requestWithdraw(100 ether);
-        _submit(_emptyBatch(uint64(vm.getBlockTimestamp()), 2));
+        _submit(_emptyBatch(2));
         uint256 sumBal = ex.balanceOf(alice) + ex.balanceOf(bob) + ex.balanceOf(carol);
         uint256 sumPending = ex.pendingPayout(alice) + ex.pendingPayout(bob) + ex.pendingPayout(carol);
         assertEq(address(ex).balance, sumBal + sumPending + ex.getLaunch(lid).pairs);

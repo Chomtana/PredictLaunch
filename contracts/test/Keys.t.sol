@@ -121,8 +121,9 @@ contract KeysTest is Test {
         ex.applyKeyAuth(a);
         vm.prank(alice);
         ex.revokeKey(key);
-        vm.expectRevert(Exchange.KeyNonceUsed.selector);
+        // a replay is a no-op: the revoked key stays revoked
         ex.applyKeyAuth(a);
+        assertEq(ex.keyExpiry(alice, key), 0);
         // signed by someone other than the owner
         Exchange.KeyAuth memory bad = _keyAuth(key, T + 100, 8, KEY_PK);
         vm.expectRevert(Exchange.BadSignature.selector);
@@ -141,8 +142,7 @@ contract KeysTest is Test {
         vm.expectEmit(address(ex));
         emit Exchange.OrderCancelled(alice, h);
         ex.cancelOrder(o);
-        vm.expectRevert(Exchange.OrderDead.selector);
-        ex.checkOrder(o, sig, T);
+        assertEq(ex.checkOrder(o, sig, T), bytes32(0), "cancelled: dead");
 
         Eip712.Order memory o6 = _order(6);
         bytes memory sig6 = _sign(o6, ALICE_PK);
@@ -151,8 +151,7 @@ contract KeysTest is Test {
         vm.expectEmit(address(ex));
         emit Exchange.MinNonceBumped(alice, 7);
         ex.bumpMinNonce(7);
-        vm.expectRevert(Exchange.OrderDead.selector);
-        ex.checkOrder(o6, sig6, T);
+        assertEq(ex.checkOrder(o6, sig6, T), bytes32(0), "below minNonce: dead");
         // min nonce only goes up
         vm.prank(alice);
         vm.expectRevert(Exchange.BadNonce.selector);
@@ -162,7 +161,6 @@ contract KeysTest is Test {
         bytes memory sig7 = _sign(o7, ALICE_PK);
         assertEq(ex.checkOrder(o7, sig7, T), ex.orderHash(o7));
         // expired
-        vm.expectRevert(Exchange.Expired.selector);
-        ex.checkOrder(o7, sig7, T + 1001);
+        assertEq(ex.checkOrder(o7, sig7, T + 1001), bytes32(0), "expired: dead");
     }
 }

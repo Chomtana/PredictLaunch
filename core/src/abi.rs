@@ -41,9 +41,11 @@ alloy_sol_types::sol! {
     #[derive(Debug, PartialEq, Eq)]
     struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
     #[derive(Debug, PartialEq, Eq)]
+    struct SignedCancel { Order order; uint64 nonce; bytes sig; }
+    #[derive(Debug, PartialEq, Eq)]
     struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; }
     #[derive(Debug, PartialEq, Eq)]
-    struct Batch { uint64 ts; KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
+    struct Batch { KeyAuth[] keys; SignedOrder[] orders; uint16[] posts; Fill[] fills; SignedCancel[] cancels; uint64 withdrawTo; }
 
     #[derive(Debug, PartialEq, Eq)]
     struct LaunchConfig {
@@ -74,7 +76,6 @@ alloy_sol_types::sol! {
         /// Factories besides `factory` (the OpenFour rail) that may register launches.
         function setExtraFactory(address factory, bool on) external;
         function extraFactory(address factory) external view returns (bool);
-        function setOperator(address op, bool on) external;
         function setFeed(address feed, bool enabled) external;
         function setMinTarget(uint256 bnb) external;
 
@@ -134,6 +135,8 @@ alloy_sol_types::sol! {
         event KeyAuthorized(address owner, address key, uint64 expiry);
         event KeyRevoked(address owner, address key);
         event OrderCancelled(address owner, bytes32 orderHash);
+        event OrderPosted(bytes32 orderHash, address owner, uint256 launchId, uint64 round, uint8 outcome,
+            uint8 side, uint8 price, uint128 amount, uint64 expiry, uint64 nonce, bytes sig);
         event MinNonceBumped(address owner, uint64 minNonce);
         event LaunchCreated(uint256 launchId, address creator, address rail, address token, address feed,
             uint256 strike, uint64 settleTime, uint16 cutBps, uint256 target, string name, string symbol,

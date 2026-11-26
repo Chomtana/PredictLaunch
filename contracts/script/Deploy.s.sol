@@ -66,7 +66,6 @@ contract Deploy is Script {
             if (feeds[i].chainlink != address(0)) ex.setFallbackFeed(feeds[i].addr, feeds[i].chainlink);
             ++enabled;
         }
-        ex.setOperator(operator, true);
         ex.setResolver(operator);
         ex.setChallengeWindow(uint64(vm.envOr("CHALLENGE_WINDOW", uint256(120))));
         if (owner != deployer) ex.transferOwnership(owner);

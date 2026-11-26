@@ -27,7 +27,6 @@ abstract contract Base is Test {
         vm.startPrank(owner);
         ex.setFactory(address(this));
         ex.setFeed(address(feed), true);
-        ex.setOperator(operator, true);
         vm.stopPrank();
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
@@ -87,6 +86,16 @@ abstract contract Base is Test {
         return Exchange.SignedOrder(o, abi.encodePacked(r, s, v));
     }
 
+    function _cancel(Eip712.Order memory o, uint64 nonce, uint256 pk)
+        internal
+        view
+        returns (Exchange.SignedCancel memory)
+    {
+        bytes32 h = Eip712.hashCancel(ex.DOMAIN_SEPARATOR(), o.owner, ex.orderHash(o), nonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, h);
+        return Exchange.SignedCancel(o, nonce, abi.encodePacked(r, s, v));
+    }
+
     function _s(Eip712.Order memory o) internal view returns (Exchange.SignedOrder memory) {
         return _sign(o, _pk(o.owner));
     }
@@ -110,12 +119,11 @@ abstract contract Base is Test {
         fs[0] = Exchange.Fill(taker, maker, kind, amount);
     }
 
-    function _batch(uint64 ts, Exchange.SignedOrder[] memory os, Exchange.Fill[] memory fs)
+    function _batch(Exchange.SignedOrder[] memory os, Exchange.Fill[] memory fs)
         internal
         view
         returns (Exchange.Batch memory b)
     {
-        b.ts = ts;
         b.orders = os;
         b.fills = fs;
         b.withdrawTo = ex.withdrawProcessed();
@@ -126,9 +134,9 @@ abstract contract Base is Test {
         ex.submitBatch(b);
     }
 
-    /// One fill between two orders (index 0 taker, 1 maker), stamped now.
+    /// One fill between two orders (index 0 taker, 1 maker).
     function _fill(Eip712.Order memory taker, Eip712.Order memory maker, uint8 kind, uint128 amount) internal {
-        _submit(_batch(uint64(vm.getBlockTimestamp()), _orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount)));
+        _submit(_batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount)));
     }
 
     function _expectFillRevert(
@@ -138,11 +146,27 @@ abstract contract Base is Test {
         uint128 amount,
         bytes4 sel
     ) internal {
-        Exchange.Batch memory b =
-            _batch(uint64(vm.getBlockTimestamp()), _orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
+        Exchange.Batch memory b = _batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
         vm.prank(operator);
         vm.expectRevert(sel);
         ex.submitBatch(b);
+    }
+
+    /// The fill lands as a no-op: `FillSkipped(next batch, 0, user)` and no Trade.
+    function _expectFillSkipped(
+        Eip712.Order memory taker,
+        Eip712.Order memory maker,
+        uint8 kind,
+        uint128 amount,
+        address user
+    ) internal {
+        Exchange.Batch memory b = _batch(_orders2(_s(taker), _s(maker)), _fills1(0, 1, kind, amount));
+        uint64 next = ex.batchCount() + 1;
+        uint128 tf = ex.filled(ex.orderHash(taker));
+        vm.expectEmit(address(ex));
+        emit Exchange.FillSkipped(next, 0, user);
+        _submit(b);
+        assertEq(ex.filled(ex.orderHash(taker)), tf, "skipped fill changed nothing");
     }
 
     /// Mint `amount` pairs: `up` buys Up at `pu`, `down` buys Down at 100 - pu.
@@ -159,8 +183,7 @@ abstract contract Base is Test {
         vm.warp(t);
     }
 
-    function _emptyBatch(uint64 ts, uint64 withdrawTo) internal pure returns (Exchange.Batch memory b) {
-        b.ts = ts;
+    function _emptyBatch(uint64 withdrawTo) internal pure returns (Exchange.Batch memory b) {
         b.withdrawTo = withdrawTo;
     }
 }

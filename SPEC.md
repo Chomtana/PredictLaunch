@@ -73,7 +73,7 @@ scripts/     dev.sh (fork demo), e2e.sh
 Order(address owner,uint256 launchId,uint32 round,uint8 outcome,uint8 side,uint8 price,uint128 amount,uint64 expiry,uint64 nonce)
     outcome 0=Up 1=Down; side 0=Buy 1=Sell; price 1..99; amount multiple of 1e16
 AuthorizeKey(address owner,address key,uint64 expiry,uint64 nonce)     signed by owner only
-Cancel(address owner,bytes32 orderHash,uint64 nonce)                    offchain only (sequencer), owner or key
+Cancel(address owner,bytes32 orderHash,uint64 nonce)                    sent to the sequencer, carried onchain in the next batch; owner or key
 ```
 `orderHash` = the EIP-712 digest of the Order. A signature is valid if `recover == owner`, or
 `recover` is a key with `keyExpiry[owner][key] >= batch.ts`.
@@ -85,7 +85,6 @@ constructor(address owner);
 
 // admin (owner)
 function setFactory(address factory) external;                       // the only address allowed to registerLaunch
-function setOperator(address op, bool on) external;
 function setFeed(address feed, bool enabled) external;
 constructor(address owner, address quoteToken);                      // quoteToken: 0 = native; else 18 decimals
 function quoteToken() external view returns (address);
@@ -125,9 +124,10 @@ function claimTokens(uint256 launchId) external;                     // Graduate
 // batches
 struct SignedOrder { Order order; bytes sig; }
 struct KeyAuth { address owner; address key; uint64 expiry; uint64 nonce; bytes sig; }
+struct SignedCancel { Order order; uint64 nonce; bytes sig; }      // the signed Cancel, with its order (whose owner it binds)
 struct Fill { uint16 taker; uint16 maker; uint8 kind; uint128 amount; } // kind 0 Transfer 1 Mint 2 Merge; indexes into orders
-struct Batch { uint64 ts; KeyAuth[] keys; SignedOrder[] orders; Fill[] fills; uint64 withdrawTo; }
-function submitBatch(Batch calldata b) external;                     // onlyOperator
+struct Batch { KeyAuth[] keys; SignedOrder[] orders; uint16[] posts; Fill[] fills; SignedCancel[] cancels; uint64 withdrawTo; }
+function submitBatch(Batch calldata b) external;                     // permissionless
 
 // views
 function launchCount() external view returns (uint256);
@@ -194,10 +194,24 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
   either way a failure goes to `pendingPayout`. The rail must call
   `receiveLoserTokens` for exactly `LOSER_SUPPLY` before returning, or `graduate` reverts.
 - `claimTokens`: pays `(loserShares − claimedShares) × LOSER_SUPPLY / totalLoserShares`.
-- Batch: `lastBatchTs ≤ ts ≤ block.timestamp`, `block.timestamp − ts ≤ MAX_LAG`; apply keys, then
-  fills in order, then withdrawals `[withdrawProcessed, withdrawTo)` paid `min(requested,
-  balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`). Any failed check
-  reverts the whole batch, except an unfunded payer (below).
+- Batch (permissionless: anyone may submit one, e.g. users trading among themselves while the
+  sequencer is down): every check runs at `block.timestamp` (order and key expiry, tradability);
+  apply keys, then fills in order, then posts (each `posts[i]` indexes `orders`; an order still
+  alive and not full is published as `OrderPosted(orderHash, owner, launchId, round, outcome,
+  side, price, amount, expiry, nonce, sig)`, so the whole book is public onchain and anyone can
+  match it, e.g. while the sequencer is down; the sequencer posts every resting order once, in the
+  next batch, with a posts-only batch when nothing else is queued), then cancels (signed by the order's owner or a live key of the
+  owner; an already-cancelled order is skipped, so a duplicate never reverts), then withdrawals `[withdrawProcessed, withdrawTo)` paid
+  `min(requested, balance)` (push with a 10k-gas call; on failure, credit `pendingPayout`).
+  Failure-tolerant: a check that depends on state others can move before the batch lands skips
+  just that item instead of reverting the batch, so a submitter racing the sequencer cannot sink
+  it. A fill is skipped (`FillSkipped(batchId, index, user)`) when its market has closed (`user`
+  = 0), an order can no longer trade (expired, signature or key no longer valid, cancelled, below
+  `minNonce`, would overfill; `user` = its owner), or a payer is short of quote or shares; an
+  already-used key authorization and an already-cancelled order are no-ops. Only a malformed batch
+  (bad indexes, bad order fields, an impossible cross, a forged signature on a key auth or cancel)
+  reverts. A submitter racing the
+  sequencer can make its batch revert (e.g. `Overfill`); the sequencer drops those fills.
 - Approve-only trading (ERC20 quote only; native mode keeps internal balances): a payer's cost is
   taken from `balanceOf` first and the rest pulled from the wallet with `transferFrom` (the user
   approves the Exchange once; no deposit needed). Every credit (Transfer seller, Merge, `redeem`) is
@@ -215,7 +229,7 @@ function initializeDistribution(address token, uint256 amount, bytes calldata, b
 
 **Events** (the sequencer indexes these): `Deposited(user, amount)`, `WithdrawRequested(idx, user,
 amount)`, `WithdrawPaid(idx, user, requested, paid)`, `KeyAuthorized(owner, key, expiry)`,
-`KeyRevoked(owner, key)`, `OrderCancelled(owner, orderHash)`, `MinNonceBumped(owner, minNonce)`,
+`KeyRevoked(owner, key)`, `OrderCancelled(owner, orderHash)`, `OrderPosted(orderHash, owner, launchId, round, outcome, side, price, amount, expiry, nonce, sig)`, `MinNonceBumped(owner, minNonce)`,
 `LaunchCreated(launchId, creator, rail, token, feed, strike, settleTime, cutBps, target, name,
 symbol, imageURI)`, `Snapshot(launchId, price, updatedAt)`, `SnapshotSource(launchId, source)` (not
 indexed by the sequencer), `FallbackFeedSet(feed, fallbackFeed)`, `Resolved(launchId, outcome, pairs,

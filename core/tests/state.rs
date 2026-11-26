@@ -217,7 +217,7 @@ fn soft_confirm_matches_contract_rules() {
                     w.s.apply_events(
                         vec![ChainEvent::BatchSubmitted {
                             batch_id: id,
-                            ts: b.ts,
+                            ts: now,
                             fills: b.fills.len() as u64,
                             batch: Some(b),
                         }],
@@ -362,7 +362,7 @@ fn withdraw_cancels_newest_first() {
         vec![
             ChainEvent::BatchSubmitted {
                 batch_id: 1,
-                ts: b.ts,
+                ts: T0 + 1,
                 fills: 0,
                 batch: Some(b),
             },
@@ -397,12 +397,10 @@ fn cuts_batch_at_settle_time() {
     // At launch 0's settleTime the open batch is cut with both fills, stamped before settle.
     let b1 = w.s.cut(s).expect("cut at settle");
     assert_eq!(b1.fills.len(), 2);
-    assert_eq!(b1.ts, SETTLE_A - 2);
-    assert!(b1.ts < SETTLE_A);
     w.s.apply_events(
         vec![ChainEvent::BatchSubmitted {
             batch_id: 1,
-            ts: b1.ts,
+            ts: SETTLE_A - 1,
             fills: 2,
             batch: Some(b1),
         }],
@@ -417,9 +415,7 @@ fn cuts_batch_at_settle_time() {
     at(&mut w, &bob, 1, Down, 40, s + 5000);
     at(&mut w, &alice, 1, Up, 60, s + 6000);
     let b2 = w.s.cut(s + 8000).expect("timer cut");
-    assert_eq!(b2.ts, SETTLE_A + 6);
     assert_eq!(b2.fills.len(), 1);
-    assert!(b2.ts < SETTLE_B);
 }
 
 #[test]
@@ -435,7 +431,6 @@ fn no_fill_at_or_after_settle() {
     w.place(&alice, 0, Up, Buy, 60, E18, SETTLE_A - 1).unwrap();
     let b = w.s.cut(ms(SETTLE_A)).unwrap();
     assert_eq!(b.fills.len(), 1);
-    assert!(b.ts < SETTLE_A);
     // Round must be 0.
     let (mut o, _) = w.order(&alice, 1, Up, Buy, 60, E18);
     o.round = 1;
@@ -547,7 +542,7 @@ fn fill_skipped_onchain_is_not_settled() {
             },
             ChainEvent::BatchSubmitted {
                 batch_id: 1,
-                ts: b.ts,
+                ts: T0 + 3,
                 fills: 2,
                 batch: Some(b),
             },
@@ -590,4 +585,160 @@ fn funds_snapshot_overrides_balance_and_enforces_locks() {
     // No funds read (native quote): balances untouched.
     w.s.apply_poll(vec![], None, ms(T0 + 3));
     assert_eq!(w.s.ledger.balance(z), U256::from(7 * E18));
+}
+
+/// Permissionless `submitBatch`: a third party lands a different fill of the same two orders first.
+/// Ours still lands, with that fill skipped onchain (it would overfill). Only the third party's counts.
+#[test]
+fn foreign_batch_frontruns_ours() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    let ours = w.s.cut(ms(T0 + 3)).unwrap();
+    let mut theirs = ours.clone();
+    theirs.fills[0].amount = E18 / 2;
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: T0 + 4,
+            fills: 1,
+            batch: Some(theirs),
+        }],
+        ms(T0 + 4),
+    );
+    w.s.apply_events(
+        vec![
+            ChainEvent::FillSkipped {
+                batch_id: 2,
+                index: 0,
+                user: bob.address(),
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 2,
+                ts: T0 + 5,
+                fills: 1,
+                batch: Some(ours),
+            },
+        ],
+        ms(T0 + 5),
+    );
+    assert_eq!(w.s.pending_fills(), 0);
+    assert_eq!(w.s.confirmed.pairs(0), E18 / 2);
+    assert_eq!(w.s.ledger.pairs(0), E18 / 2, "our fill is gone");
+    assert_eq!(w.s.confirmed.shares(0, alice.address(), Up), E18 / 2);
+    assert_eq!(w.s.confirmed.shares(0, bob.address(), Down), E18 / 2);
+    assert_eq!(w.s.trades.len(), 1);
+    check_invariants(&w);
+}
+
+/// An exact copy of our in-flight batch landing first is recognised as ours.
+#[test]
+fn identical_foreign_batch_counts_as_ours() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    w.place(&alice, 0, Up, Buy, 60, E18, T0).unwrap();
+    let ours = w.s.cut(ms(T0 + 3)).unwrap();
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: T0 + 4,
+            fills: 1,
+            batch: Some(ours.clone()),
+        }],
+        ms(T0 + 4),
+    );
+    // Our own copy then lands with its fill skipped (it would overfill): nothing changes.
+    w.s.apply_events(
+        vec![
+            ChainEvent::FillSkipped {
+                batch_id: 2,
+                index: 0,
+                user: bob.address(),
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 2,
+                ts: T0 + 5,
+                fills: 1,
+                batch: Some(ours),
+            },
+        ],
+        ms(T0 + 5),
+    );
+    assert_eq!(w.s.confirmed.pairs(0), E18);
+    assert_eq!(w.s.ledger.pairs(0), E18);
+    assert_eq!(w.s.trades.len(), 1);
+    check_invariants(&w);
+}
+
+/// A cancel is carried onchain in the next batch (with its order), survives a failed batch, and
+/// settles once the chain reports it.
+#[test]
+fn cancel_goes_onchain_in_batch() {
+    let mut w = W::new(2000);
+    let (alice, bob) = (w.alice.clone(), w.bob.clone());
+    // Alice rests 2, Bob takes 1: the order is now public in the batch calldata.
+    w.place(&alice, 0, Up, Buy, 60, 2 * E18, T0).unwrap();
+    w.place(&bob, 0, Down, Buy, 40, E18, T0).unwrap();
+    let o = w.s.orders.values().find(|e| e.order.owner == alice.address()).unwrap().order.clone();
+    let h = order_hash(&domain(), &o);
+    w.s.accept_group(vec![cancel_msg(&alice, &o, false)], ms(T0 + 1)).unwrap();
+    let b = w.s.cut(ms(T0 + 3)).unwrap();
+    assert_eq!(b.fills.len(), 1);
+    assert_eq!(b.cancels.len(), 1);
+    assert_eq!(b.cancels[0].order.owner, alice.address());
+    // The batch fails: its fill is reversed, the cancel is queued again.
+    w.s.on_batch_failed(ms(T0 + 4));
+    let b = w.s.cut(ms(T0 + 7)).unwrap();
+    assert!(b.fills.is_empty());
+    assert_eq!(b.cancels.len(), 1);
+    w.s.apply_events(
+        vec![
+            ChainEvent::OrderCancelled {
+                owner: alice.address(),
+                order_hash: h,
+            },
+            ChainEvent::BatchSubmitted {
+                batch_id: 1,
+                ts: T0 + 8,
+                fills: 0,
+                batch: Some(b),
+            },
+        ],
+        ms(T0 + 8),
+    );
+    assert!(w.s.cancelled.contains(&h));
+    assert!(w.s.cut(ms(T0 + 20)).is_none(), "nothing left to send");
+    assert!(w.s.books[&0].is_empty());
+}
+
+/// Resting orders reach the onchain book: a lone resting order gets a posts-only batch, a partly
+/// filled maker is posted with its fill, and nothing is posted twice.
+#[test]
+fn resting_orders_are_posted_once() {
+    let mut w = W::new(2000);
+    let (alice, bob, carol) = (w.alice.clone(), w.bob.clone(), w.carol.clone());
+    w.place(&carol, 1, Up, Buy, 30, E18, T0).unwrap();
+    let b = w.s.cut(ms(T0)).expect("posts-only batch");
+    assert!(b.fills.is_empty());
+    assert_eq!(b.posts.len(), 1);
+    assert_eq!(b.orders[b.posts[0] as usize].order.owner, carol.address());
+    w.s.apply_events(
+        vec![ChainEvent::BatchSubmitted {
+            batch_id: 1,
+            ts: T0 + 1,
+            fills: 0,
+            batch: Some(b),
+        }],
+        ms(T0 + 1),
+    );
+    assert!(w.s.cut(ms(T0 + 2)).is_none(), "already posted");
+    // Alice rests 2, Bob takes 1: the batch carries the fill and posts Alice's remainder.
+    w.place(&alice, 0, Up, Buy, 60, 2 * E18, T0 + 2).unwrap();
+    w.place(&bob, 0, Down, Buy, 40, E18, T0 + 2).unwrap();
+    let b = w.s.cut(ms(T0 + 5)).unwrap();
+    assert_eq!(b.fills.len(), 1);
+    assert_eq!(b.posts.len(), 1);
+    assert_eq!(b.orders[b.posts[0] as usize].order.owner, alice.address());
 }
