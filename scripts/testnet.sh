@@ -9,10 +9,11 @@
 #   scripts/testnet.sh --no-seed     no bots
 #   scripts/testnet.sh --no-frontend no Vite
 #   scripts/testnet.sh --redeploy    forget the deployment and deploy a fresh Exchange (and OpenFour)
-#   scripts/testnet.sh --verify      (re)try BscScan verification of the deployment, then run as usual
+#   scripts/testnet.sh --verify      (re)try verification of the deployment, then run as usual
 #
-# BscScan: with ETHERSCAN_API_KEY in .env, every contract we deploy is verified after the deploy (once; also
-# the constructor-created ones), via scripts/verify.sh from the broadcasts saved with the deployment.
+# Verification: every contract we deploy (also the constructor-created ones) is verified once after the deploy by
+# scripts/verify.sh, from the broadcasts saved with the deployment: on BscScan when ETHERSCAN_API_KEY's plan
+# covers BNB Chain (the free plan does not), else on Sourcify (free, no key).
 #
 # The deployment is TRACKED in git (public addresses only, never keys): deployments/bsc-testnet.json (summary:
 # addresses, deploy block, BscScan links) and deployments/bsc-testnet/ (what later runs reuse: deploy.json,
@@ -126,14 +127,10 @@ if [ $FOUR = 1 ] && [ ! -f "$DEP/four.json" ]; then
 fi
 [ $FOUR = 1 ] && [ -f "$DEP/four.json" ] && FOUR_RAIL="$(jq -r .rail "$DEP/four.json")"
 
-if [ -n "${ETHERSCAN_API_KEY:-}" ]; then
-  if [ $FORCE_VERIFY = 1 ] || [ ! -f "$DEP/verified" ]; then
-    step "verifying the contracts on BscScan (scripts/verify.sh)"
-    if "$ROOT/scripts/verify.sh" "$DEP"/broadcast-*.json 2>&1 | tee "$OUT/verify.log"; then date -u +%Y-%m-%dT%H:%M:%SZ >"$DEP/verified"
-    else echo "verification incomplete (see .dev/testnet/verify.log); retry: scripts/testnet.sh --verify"; fi
-  fi
-else
-  echo "BscScan verification skipped: set ETHERSCAN_API_KEY in .env (then scripts/testnet.sh --verify)"
+if [ $FORCE_VERIFY = 1 ] || [ ! -f "$DEP/verified" ]; then
+  step "verifying the contracts (scripts/verify.sh: BscScan with a paid Etherscan key, else Sourcify)"
+  if "$ROOT/scripts/verify.sh" "$DEP"/broadcast-*.json 2>&1 | tee "$OUT/verify.log"; then date -u +%Y-%m-%dT%H:%M:%SZ >"$DEP/verified"
+  else echo "verification incomplete (see .dev/testnet/verify.log); retry: scripts/verify.sh"; fi
 fi
 echo "four rail $FOUR_RAIL"
 
@@ -148,12 +145,12 @@ write_summary() {
     def link: "https://testnet.bscscan.com/address/\(.)";
     {
       network: "bsc-testnet", chainId: 97, startBlock: ($startBlock | tonumber),
-      verifiedOnBscScan: (if $verified == "" then null else $verified end),
+      verifiedAt: (if $verified == "" then null else $verified end),
       quoteToken: $deploy.quoteToken, owner: $deploy.owner, operator: $deploy.operator,
       exchange: $deploy.exchange, flapFactory: $deploy.factory,
       four: (if $four == null then null else {rail: $four.rail, presetId: $four.presetId, validator: $four.validator, signer: $four.signer, quoteAsset: $four.quoteAsset} end),
       openfour: $openfour,
-      contracts: ($contracts | map(. + {bscscan: (.address | link)}))
+      contracts: ($contracts | map(. + {bscscan: (.address | link), sourcify: "https://repo.sourcify.dev/97/\(.address)"}))
     }' >"$SUMMARY"
 }
 write_summary
