@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { shortAddr } from '../lib/format.ts'
 import { fmtBnb, parseBnb, usd, fmtAmt } from '../lib/units.ts'
-import { isNative } from '../lib/chain.ts'
+import { isNative, TBNB_FAUCET } from '../lib/chain.ts'
 import { DEV_ACCOUNTS } from '../lib/wallet.ts'
 import { useApp } from '../state.tsx'
 import { labelsFor } from '../lib/labels.ts'
@@ -67,7 +67,7 @@ function ConnectList() {
 }
 
 function Connected() {
-  const { wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, tradingReady, needsApproval, exchangeBalance, available, enableTrading, forgetKey, disconnect, launches } = useApp()
+  const { config, wallet, user, walletBalance, quoteSymbol: q, quoteUsd, quoteToken, deposit, withdraw, faucet, keyState, tradingReady, needsApproval, exchangeBalance, available, enableTrading, forgetKey, disconnect, launches } = useApp()
   const native = isNative(quoteToken)
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
   const [amt, setAmt] = useState('')
@@ -162,9 +162,23 @@ function Connected() {
       )}
       </>
       )}
-      <button className="btn ghost wide" onClick={faucet}>
-        {native ? 'Get 1,000 test BNB (faucet)' : `Get 10,000 test ${q} (faucet)`}
-      </button>
+      {config && !config.devFaucet && native ? (
+        <a className="btn ghost wide" href={TBNB_FAUCET} target="_blank" rel="noreferrer">
+          Get test BNB (BNB Chain faucet)
+        </a>
+      ) : (
+        <button className="btn ghost wide" onClick={faucet}>
+          {native ? 'Get 1,000 test BNB (faucet)' : config && !config.devFaucet ? `Mint 10,000 test ${q} (you pay the gas)` : `Get 10,000 test ${q} (faucet)`}
+        </button>
+      )}
+      {config && !config.devFaucet && !native && (
+        <div className="muted small">
+          Gas is test BNB:{' '}
+          <a href={TBNB_FAUCET} target="_blank" rel="noreferrer">
+            BNB Chain testnet faucet
+          </a>
+        </div>
+      )}
 
       <div className="section-label">Trading session</div>
       {tradingReady ? (

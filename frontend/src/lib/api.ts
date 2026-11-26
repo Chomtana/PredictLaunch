@@ -35,6 +35,8 @@ export interface Config {
   quoteSymbol?: string
   /** Optional: true when POST /api/faucet is enabled (--dev-faucet). */
   faucet?: boolean
+  /** True when the sequencer runs with --dev-faucet (anvil fork only); false on a real network. */
+  devFaucet?: boolean
   /** Question launches (SPEC "Question launches"): "mock" = simulated oracle, no paid Cournot calls. */
   cournotMode?: 'live' | 'mock'
   /** Seconds a resolver proposal can be challenged before resolve() accepts it. */

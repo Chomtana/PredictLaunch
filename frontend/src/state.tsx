@@ -436,8 +436,23 @@ function useAppState() {
     [wallet, config, runTx],
   )
 
+  /** Fork (--dev-faucet): the sequencer funds gas and quote. Real network: mint the quote token from the wallet
+   *  (Flap's faucet USDT has a public mint; the wallet pays the gas in tBNB); native BNB can't be minted. */
   const faucet = useCallback(async () => {
     if (!wallet) return
+    if (config && !config.devFaucet) {
+      if (quoteNative || !config.quoteToken) {
+        toast({ kind: 'error', title: 'No faucet here', body: `Get test BNB from ${chainLib.TBNB_FAUCET}` }, 8000)
+        return
+      }
+      await runTx(
+        `Mint 10,000 test ${quoteSymbol}`,
+        () => chainLib.mintQuote(wallet.client, wallet.account, config.quoteToken!, wallet.address as Address, 10_000n * 10n ** 18n),
+        `10,000 test ${quoteSymbol} minted to your wallet`,
+      )
+      refreshUser()
+      return
+    }
     try {
       await api.faucet(wallet.address)
       const body = quoteNative ? '1,000 test BNB sent to your wallet' : `10,000 test ${quoteSymbol} and 1,000 BNB for gas sent to your wallet`
@@ -446,7 +461,7 @@ function useAppState() {
     } catch (e) {
       toast({ kind: 'error', title: 'Faucet unavailable', body: e instanceof ApiError ? e.message : errMsg(e) })
     }
-  }, [wallet, toast, refreshUser, quoteNative, quoteSymbol])
+  }, [wallet, config, runTx, toast, refreshUser, quoteNative, quoteSymbol])
 
   /** Flap: mines a salt, then Portal.newLauncher{value: saltLockFee}(factory, abi.encode(cfg)).
    *  Four: FourRail.createLaunch(cfg) (no salt, no fee). */

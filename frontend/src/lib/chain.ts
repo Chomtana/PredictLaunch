@@ -96,6 +96,21 @@ export const encodeLaunchConfig = (c: LaunchConfig): Hex => encodeAbiParameters(
 
 type Who = Account | Address
 
+/** The quote token's `mint(to, amount)`: public on Flap's testnet faucet USDT, so anyone can mint test tokens. */
+export function mintQuote(wallet: WalletClient, account: Who, quote: Address, to: Address, amount: bigint): Promise<Hex> {
+  return wallet.writeContract({
+    address: quote,
+    abi: parseAbi(['function mint(address to, uint256 amount)']),
+    functionName: 'mint',
+    args: [to, amount],
+    account,
+    chain: wallet.chain,
+  })
+}
+
+/** Where to get test BNB (gas) on BSC testnet. */
+export const TBNB_FAUCET = 'https://www.bnbchain.org/en/testnet-faucet'
+
 export const fourRailAbi = [
   { type: 'function', name: 'createLaunch', stateMutability: 'nonpayable', inputs: [{ name: 'c', ...LAUNCH_CONFIG_ABI[0] }], outputs: [{ name: 'launchId', type: 'uint256' }] },
 ] as const
