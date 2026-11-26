@@ -357,6 +357,17 @@ async function main() {
   const mkts = new Map<number, Mkt>(created.map((m) => [Number(m.id), m]))
   console.log(`seed: live loop on every tradable launch, paced to reach each target at ${PACE * 100}% of its life (Ctrl-C to stop)`)
   let tick = 0
+  // Every resting quote and every cancel lands onchain (the public book), and costs the operator gas: requote
+  // only when something changed (the quoting centre moved, a take ate into the ladder), or to refresh every ~90 s.
+  const quoted = new Map<number, { center: number; dirty: boolean; tick: number }>()
+  const requote = async (m: Mkt, f: number) => {
+    const q = quoted.get(Number(m.id))
+    const c = center(m, f)
+    const has = [...maker.resting.values()].includes(m.id)
+    if (has && q && q.center === c && !q.dirty && tick - q.tick < 30) return
+    await quote(maker, m, f)
+    quoted.set(Number(m.id), { center: c, dirty: false, tick })
+  }
   for (;;) {
     await sleep(rnd(2000, 4000))
     let open: Summary[]
@@ -389,14 +400,15 @@ async function main() {
       try {
         const f = await fair(m)
         // The maker is never paced: every tradable launch has two-sided liquidity, whatever its settle time.
-        if (tick % 3 === 0 || ![...maker.resting.values()].includes(m.id)) await quote(maker, m, f)
+        if (tick % 3 === 0 || ![...maker.resting.values()].includes(m.id)) await requote(m, f)
         const gap = behindPairs(l, now)
         if (gap > 0n) {
           // Close the gap in steps: at most ~5 (x K) pairs a tick so the chart moves smoothly.
           const size = gap < shares(0.1) ? shares(0.1) : gap > shares(5) ? shares(rnd(2.5, 5)) : gap
           await take(takers[(tick + l.id) % 2], m, f, size)
-          // Refill what the take ate: every launch keeps a full book for real users at all times.
-          await quote(maker, m, f)
+          // Refill what the take ate at the next requote (3 levels a side keep the book two-sided meanwhile).
+          const q = quoted.get(l.id)
+          if (q) q.dirty = true
         }
       } catch (e) {
         const msg = (e as Error).message.split('\n')[0]
@@ -426,7 +438,7 @@ async function main() {
       }
     }
     // Forget launches that are gone.
-    for (const id of mkts.keys()) if (!open.some((l) => l.id === id)) mkts.delete(id)
+    for (const id of mkts.keys()) if (!open.some((l) => l.id === id)) (mkts.delete(id), quoted.delete(id))
   }
 }
 

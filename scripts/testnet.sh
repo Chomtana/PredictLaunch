@@ -165,6 +165,25 @@ PIDS+=($!)
 for _ in $(seq 240); do curl -sf "$API/api/status" >/dev/null && break; sleep 0.5; done
 curl -sf "$API/api/status" >/dev/null || { tail -30 "$OUT/sequencer.log"; exit 1; }
 
+# Operator auto top-up: every batch (fills, cancels, the public book's posts) is gas the operator pays, and nothing
+# else refills it (the seed bots refill only their own wallets). Below OP_MIN it gets back to OP_FILL from the
+# deployer; a failed send (e.g. a nonce race with the bots' refills) is retried on the next round.
+OP_MIN="${OP_MIN:-0.2}" OP_FILL="${OP_FILL:-0.5}"
+(
+  while sleep 120; do
+    bal="$(cast balance "$OP" --rpc-url "$RPC" 2>/dev/null)" || continue
+    [ "$(echo "$bal < $(cast to-wei "$OP_MIN")" | bc)" = 1 ] || continue
+    amt="$(echo "$(cast to-wei "$OP_FILL") - $bal" | bc)"
+    if cast send --rpc-url "$RPC" --private-key "$DEPLOYER_KEY" --legacy --gas-price 0.1gwei --value "$amt" "$OP" \
+      >/dev/null 2>&1; then
+      echo "$(date -u +%FT%TZ) topped up operator $OP by $(cast from-wei "$amt") tBNB"
+    else
+      echo "$(date -u +%FT%TZ) operator top-up failed (deployer low on tBNB? scripts/wallets.sh says how much to send)"
+    fi
+  done
+) >"$OUT/topup.log" 2>&1 &
+PIDS+=($!)
+
 if [ $SEED = 1 ]; then
   step "starting live seed bots (creator $CREATOR, maker $MAKER, takers $TAKER1 $TAKER2)"
   (cd "$ROOT/frontend" && exec node --experimental-strip-types --no-warnings scripts/seed.ts \

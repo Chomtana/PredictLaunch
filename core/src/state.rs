@@ -1281,8 +1281,10 @@ impl State {
         if !self.batches.front()?.sealed {
             return None;
         }
-        let posts = self.unposted(now_ms / 1000);
+        let mut posts = self.unposted(now_ms / 1000);
         let b = self.batches.front_mut().expect("front");
+        // Posts fill whatever room the batch has left; the rest go in the next one.
+        posts.truncate(MAX_BATCH_BYTES.saturating_sub(b.approx_bytes()) / ORDER_BYTES);
         b.posts = posts;
         let b = self.batches.front().expect("front");
         let orders = &self.orders;
@@ -1635,7 +1637,11 @@ impl State {
         if self
             .batches
             .back()
-            .is_some_and(|b| !b.sealed && b.cancels.len() >= MAX_BATCH_FILLS)
+            .is_some_and(|b| {
+                !b.sealed
+                    && (b.cancels.len() >= MAX_BATCH_FILLS
+                        || b.approx_bytes() + CANCEL_BYTES > MAX_BATCH_BYTES)
+            })
         {
             self.seal_back();
         }
@@ -1644,7 +1650,11 @@ impl State {
 
     fn push_fill(&mut self, rec: FillRec, settle: u64, now_ms: u64) {
         if let Some(b) = self.batches.back() {
-            if !b.sealed && (b.ts >= settle || b.fills.len() >= MAX_BATCH_FILLS) {
+            if !b.sealed
+                && (b.ts >= settle
+                    || b.fills.len() >= MAX_BATCH_FILLS
+                    || b.approx_bytes() + FILL_BYTES > MAX_BATCH_BYTES)
+            {
                 self.seal_back();
             }
         }

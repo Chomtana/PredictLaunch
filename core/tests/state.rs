@@ -742,3 +742,42 @@ fn resting_orders_are_posted_once() {
     assert_eq!(b.posts.len(), 1);
     assert_eq!(b.orders[b.posts[0] as usize].order.owner, alice.address());
 }
+
+/// A cancel-heavy batch with posts stays under the 128 KiB transaction size nodes accept.
+#[test]
+fn batch_stays_under_tx_size_limit() {
+    use alloy_sol_types::SolValue;
+    let mut w = W::new(2000);
+    let alice = w.alice.clone();
+    let mut placed = Vec::new();
+    for i in 0..260u64 {
+        let m = w.place_msg(&alice, i % 2, Up, Buy, 1 + (i % 9) as u8, SHARE_UNIT * 100);
+        if let Msg::Place { order, .. } = &m {
+            placed.push(order.clone());
+        }
+        w.s.accept_group(vec![m], ms(T0)).unwrap();
+    }
+    // The first 200 rest unposted; cancel them all, then cut while the other 60 still wait to be posted.
+    for o in &placed[..200] {
+        w.s.accept_group(vec![cancel_msg(&alice, o, false)], ms(T0 + 1)).unwrap();
+    }
+    let mut sizes = Vec::new();
+    let mut now = T0 + 3;
+    while let Some(b) = w.s.cut(ms(now)) {
+        sizes.push((b.abi_encode().len(), b.cancels.len(), b.posts.len()));
+        w.s.apply_events(
+            vec![ChainEvent::BatchSubmitted {
+                batch_id: sizes.len() as u64,
+                ts: now,
+                fills: 0,
+                batch: Some(b),
+            }],
+            ms(now),
+        );
+        now += 3;
+        assert!(sizes.len() < 20, "batches keep coming: {sizes:?}");
+    }
+    assert!(sizes.iter().all(|(n, _, _)| *n < 128 * 1024), "{sizes:?}");
+    assert_eq!(sizes.iter().map(|s| s.1).sum::<usize>(), 200, "every cancel lands");
+    assert_eq!(sizes.iter().map(|s| s.2).sum::<usize>(), 60, "every resting order is posted once");
+}

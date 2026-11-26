@@ -80,6 +80,12 @@ impl PendingBatch {
         }
     }
 
+    /// Upper bound of the batch's calldata before posts (see `MAX_BATCH_BYTES`).
+    pub fn approx_bytes(&self) -> usize {
+        use crate::types::{CANCEL_BYTES, FILL_BYTES, KEY_BYTES};
+        1024 + self.fills.len() * FILL_BYTES + self.cancels.len() * CANCEL_BYTES + self.keys.len() * KEY_BYTES
+    }
+
     pub fn is_empty(&self) -> bool {
         self.fills.is_empty() && self.keys.is_empty() && self.cancels.is_empty()
     }
@@ -90,6 +96,7 @@ impl PendingBatch {
             || now_ms / 1000 >= self.min_settle
             || self.fills.len() >= crate::types::MAX_BATCH_FILLS
             || self.cancels.len() >= crate::types::MAX_BATCH_FILLS
+            || self.approx_bytes() >= crate::types::MAX_BATCH_BYTES
     }
 }
 

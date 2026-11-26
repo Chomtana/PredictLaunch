@@ -27,7 +27,7 @@ LABEL="BSC testnet (.env BSC_TESTNET_RPC_URL)"
 SHOW_KEYS=0
 DISTRIBUTE=1
 # Recommended tBNB per role (same order as ROLE_NAMES in keys.sh: deployer operator creator maker taker1 taker2).
-NEED=(0.1 0.1 0.1 0.02 0.02 0.02)
+NEED=(0.1 0.5 0.1 0.02 0.02 0.02)
 KEEP="${NEED[0]}"
 while [ $# -gt 0 ]; do
   case "$1" in

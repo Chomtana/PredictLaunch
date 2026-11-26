@@ -21,6 +21,14 @@ pub const CUTS: [u16; 5] = [1000, 1500, 2000, 2500, 3000];
 pub const LOSER_SUPPLY: u128 = 500_000_000 * 10u128.pow(18);
 /// Fills per batch cap (gas).
 pub const MAX_BATCH_FILLS: usize = 200;
+/// Worst-case calldata of a batch, kept under the 128 KiB transaction size nodes accept (`oversized data`).
+pub const MAX_BATCH_BYTES: usize = 110_000;
+/// ABI bytes, upper bounds: a signed order, a fill (plus the two orders it may bring), a cancel (with its order),
+/// a key authorization.
+pub const ORDER_BYTES: usize = 480;
+pub const FILL_BYTES: usize = 128 + 2 * ORDER_BYTES;
+pub const CANCEL_BYTES: usize = 512;
+pub const KEY_BYTES: usize = 320;
 /// Users per `redeem` call.
 pub const REDEEM_CHUNK: usize = 50;
 /// Max messages per atomic group.

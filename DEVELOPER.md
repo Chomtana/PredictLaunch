@@ -95,6 +95,11 @@ to the deployer. USDT needs nothing: the bots mint Flap's faucet USDT (public `m
 they run low (every few ticks, and right away after an `insufficient_balance` rejection). On a real network
 they only warn when an account's gas runs low.
 
+**Operator gas.** Every batch (fills, cancels and the posts of the public book) is gas the operator pays: about
+30k gas per posted order or cancel. While `testnet.sh` runs, it tops the operator up from the deployer every 2 min
+when it drops below 0.2 tBNB, back to 0.5 (`OP_MIN` / `OP_FILL`; log in `.dev/testnet/topup.log`), so keep the
+deployer funded. The seed maker requotes only when its price moves, a take ate into its ladder, or every ~90 s.
+
 **Verification.** `testnet.sh` verifies every contract it deployed right after the deploy: Exchange, the Flap
 factory and the beacon + Launcher implementation its constructor creates, FourRail, the preset validator and
 the three OpenFour modules (`scripts/verify.sh`, from the broadcasts saved in `deployments/bsc-testnet/`;
