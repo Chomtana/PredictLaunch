@@ -70,6 +70,103 @@ Launch: **"BTC above $95,000 at 18:00?"**, coin **$MOON**, cut **20%**, target *
 Had the pairs been only 10,000 (raise 2,000 USDT, under target), Up holders would get 1.00 each, Down holders
 nothing, and no coin would launch.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph USER[User's browser]
+        WAL[Wallet<br/>MetaMask / injected]
+        TK[Trading key<br/>session key in browser,<br/>signs orders without popups]
+    end
+
+    subgraph CF[Cloudflare Pages]
+        FE[React + Vite frontend<br/>create · trade · chart · order book<br/>positions · redeem · claim]
+    end
+
+    subgraph AWS[AWS]
+        subgraph SEQ[Rust sequencer]
+            API[HTTP + WebSocket API]
+            BOOK[Order book + matcher<br/>EIP-712 order checks]
+            BAT[Batcher<br/>fills → on-chain batches]
+            KEEP[Keeper<br/>snapshot · resolve · redeem · graduate]
+            MIR[State mirror<br/>replays Exchange events]
+            PX[Price stream]
+            ORC[Cournot client<br/>tracker · resolver · oracle store]
+        end
+        BOTS[Market-maker + seed bots]
+    end
+
+    subgraph BSC[BSC testnet]
+        EX[Exchange<br/>USDT collateral · Up/Down shares<br/>batches · settlement · redeem · loser claims]
+        subgraph FLAPRAIL[Flap rail]
+            LF[PredictLaunchLauncherFactory]
+            LN[PredictLaunchLauncher<br/>beacon proxy per launch]
+            PORTAL[Flap Pool Launch Portal]
+        end
+        subgraph FOURRAIL[Four.meme rail]
+            FR[FourRail]
+            CORE[OpenFour Core + Registry]
+            PRE[PredictLaunch preset<br/>fair-launch curve · trade module<br/>migrate module · validator]
+        end
+        ATF[Atlas feeds<br/>BNB · BTC · ETH]
+        CL[Chainlink feeds<br/>BTCB · CAKE · USDT]
+        USDT[(USDT)]
+        PCS[PancakeSwap pool<br/>raise + 500M tokens]
+    end
+
+    ATAPI[Atlas API<br/>CoinMarketCap data]
+    CN[Cournot Intelligence Oracle<br/>resolve · probability]
+
+    FE -. served to .-> USER
+    WAL -->|approve USDT · authorize trading key<br/>create launch · redeem · claim| EX
+    TK -->|signed orders| API
+    FE <-->|HTTPS + WSS: book, trades,<br/>prices, launches| API
+    BOTS -->|signed quotes| API
+
+    API --> BOOK --> BAT
+    BAT -->|fill batches| EX
+    KEEP -->|snapshot · resolve · proposeOutcome<br/>redeem · graduate| EX
+    EX -->|events| MIR --> BOOK
+    PX -->|poll| ATAPI
+    PX --> API
+    ORC -->|resolve · probability| CN
+    ORC --> KEEP
+    ORC --> API
+
+    EX -->|settle read| ATF
+    EX -->|second source| CL
+    EX <--> USDT
+    EX -->|create launch| LF --> LN
+    LN -->|salt lock · launch token| PORTAL --> PCS
+    EX -->|graduate| FR --> CORE --> PRE
+    CORE -->|migrate at sell-out| PCS
+    LN -->|500M tokens for losers| EX
+    FR -->|500M tokens for losers| EX
+```
+
+**Frontend: Cloudflare Pages.** The React app is a static build served from Cloudflare's edge, with no
+server of its own. It reads live data from the sequencer over HTTPS and WebSocket (`VITE_API_URL`) and sends
+transactions to BSC through the user's wallet. One wallet signature authorizes a trading key in the browser,
+which then signs every order without a wallet popup.
+
+**Sequencer: AWS.** One Rust service runs the off-chain half of the exchange:
+
+| Component | Role |
+|---|---|
+| HTTP + WebSocket API | launches, book, trades, prices, positions, Cournot endpoints; pushes live updates |
+| Order book + matcher | checks EIP-712 signatures and balances, matches Up/Down orders instantly and gaslessly |
+| Batcher | packs fills into batches and submits them to the Exchange |
+| State mirror | replays Exchange events so balances and launches match the chain |
+| Keeper | at settlement time: Atlas snapshot or Cournot resolve, then redeem winners and graduate the coin |
+| Price stream | polls the Atlas API (CoinMarketCap data) for live charts |
+| Cournot client | matches questions, opening probability, market tracking, settlement evidence |
+
+The market-maker and seed bots run alongside it on AWS and quote through the same public API as any user.
+
+**Contracts: BSC testnet.** The Exchange holds all collateral and pays every winner and loser directly. The
+sequencer can only submit fills users signed, settlement reads the oracle on-chain, and graduation goes
+through Flap (our Launcher Factory) or Four.meme (our FourRail and OpenFour preset) into a PancakeSwap pool.
+
 ## Contract Deployment Address
 
 BSC testnet (chain ID 97). Collateral is Flap's testnet USDT
